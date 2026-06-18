@@ -1,0 +1,23 @@
+# IDE 与本地工具状态
+.idea/
+.impeccable/
+.tmp/
+
+# 所有本地环境变量，仅允许模板
+.env
+.env.*
+!.env.example
+
+# SQLite 主文件及 WAL/SHM 临时文件
+*.db
+*.db-*
+*.db-journal
+*.sqlite
+*.sqlite-*
+
+# 构建、依赖与日志
+node_modules/
+dist/
+*.log
+coverage/
+.vite/

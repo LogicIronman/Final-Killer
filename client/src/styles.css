@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #1a1a1a;
+  background: #ffffff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: Manrope, Inter, system-ui, sans-serif;
+  background: #ffffff;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+@keyframes correct-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(38, 115, 77, 0);
+  }
+  45% {
+    box-shadow: 0 0 0 6px rgba(38, 115, 77, 0.16);
+  }
+}
+
+@keyframes wrong-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+.answer-correct {
+  animation: correct-pulse 220ms ease-out;
+}
+
+.answer-wrong {
+  animation: wrong-shake 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}
