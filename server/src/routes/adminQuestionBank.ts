@@ -16,6 +16,8 @@ const router = Router();
 router.use(requireAdmin);
 
 const previewSchema = z.object({
+  mode: z.enum(["create", "update"]).default("update"),
+  quizBankId: z.number().int().positive().optional(),
   bankName: z.string().trim().min(1).max(100).optional(),
   sourceFileName: z.string().trim().min(1).max(255),
   questions: z.unknown()
@@ -39,6 +41,8 @@ router.post("/preview", async (req, res) => {
   try {
     const preview = await createQuestionBankPreview(await getDb(), {
       questions: parsed.data.questions,
+      mode: parsed.data.mode,
+      quizBankId: parsed.data.quizBankId,
       bankName: parsed.data.bankName,
       sourceFileName: parsed.data.sourceFileName,
       createdBy: req.user!.id

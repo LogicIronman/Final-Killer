@@ -115,7 +115,7 @@ export async function migrate(db: AppDb) {
     );
 
     CREATE TABLE IF NOT EXISTS questions (
-      id TEXT PRIMARY KEY,
+      id TEXT NOT NULL,
       quiz_bank_id INTEGER NOT NULL,
       question TEXT NOT NULL,
       options_json TEXT NOT NULL,
@@ -123,6 +123,7 @@ export async function migrate(db: AppDb) {
       chapter TEXT,
       type TEXT NOT NULL,
       explanation TEXT,
+      PRIMARY KEY (quiz_bank_id, id),
       FOREIGN KEY (quiz_bank_id) REFERENCES quiz_banks(id) ON DELETE CASCADE
     );
 
@@ -143,7 +144,7 @@ export async function migrate(db: AppDb) {
       wrong_history_json TEXT,
       UNIQUE(user_id, quiz_bank_id, question_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE,
+      FOREIGN KEY (quiz_bank_id, question_id) REFERENCES questions(quiz_bank_id, id) ON DELETE CASCADE,
       FOREIGN KEY (quiz_bank_id) REFERENCES quiz_banks(id) ON DELETE CASCADE
     );
 
@@ -172,6 +173,24 @@ export async function migrate(db: AppDb) {
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS exam_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      quiz_bank_id INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      question_ids_json TEXT NOT NULL,
+      answers_json TEXT NOT NULL,
+      summary_json TEXT,
+      include_essay INTEGER NOT NULL DEFAULT 0,
+      duration_seconds INTEGER NOT NULL DEFAULT 2400,
+      started_at TEXT NOT NULL,
+      deadline_at TEXT NOT NULL,
+      submitted_at TEXT,
+      submit_reason TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (quiz_bank_id) REFERENCES quiz_banks(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -179,7 +198,8 @@ export async function migrate(db: AppDb) {
 
     CREATE TABLE IF NOT EXISTS question_bank_previews (
       id TEXT PRIMARY KEY,
-      quiz_bank_id INTEGER NOT NULL,
+      quiz_bank_id INTEGER,
+      import_mode TEXT NOT NULL DEFAULT 'update',
       bank_name TEXT NOT NULL,
       source_file_name TEXT NOT NULL,
       questions_json TEXT NOT NULL,
@@ -190,7 +210,7 @@ export async function migrate(db: AppDb) {
       added_ids_json TEXT NOT NULL,
       updated_ids_json TEXT NOT NULL,
       removed_ids_json TEXT NOT NULL,
-      base_updated_at TEXT NOT NULL,
+      base_updated_at TEXT,
       created_by INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
@@ -214,18 +234,10 @@ export async function migrate(db: AppDb) {
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
     );
 
-    CREATE INDEX IF NOT EXISTS idx_questions_bank ON questions(quiz_bank_id);
-    CREATE INDEX IF NOT EXISTS idx_questions_chapter_type ON questions(chapter, type);
-    CREATE INDEX IF NOT EXISTS idx_progress_user_bank_status
-      ON user_progress(user_id, quiz_bank_id, status);
-    CREATE INDEX IF NOT EXISTS idx_daily_logs_user_bank_date
-      ON daily_logs(user_id, quiz_bank_id, date);
-    CREATE INDEX IF NOT EXISTS idx_exam_schedules_exam_at ON exam_schedules(exam_at);
-    CREATE INDEX IF NOT EXISTS idx_question_bank_previews_expires
-      ON question_bank_previews(expires_at);
-    CREATE INDEX IF NOT EXISTS idx_question_bank_versions_created
-      ON question_bank_versions(created_at DESC);
   `);
+
+  await migrateQuestionsCompositeKey(db);
+  await createIndexes(db);
 
   const userColumns = await db.all<Array<{ name: string }>>("PRAGMA table_info(users)");
   if (!userColumns.some((column) => column.name === "role")) {
@@ -237,9 +249,16 @@ export async function migrate(db: AppDb) {
     await db.exec("ALTER TABLE user_progress ADD COLUMN last_wrong_at TEXT;");
   }
 
+  await migrateQuestionBankPreviews(db);
+
   const previewColumns = await db.all<Array<{ name: string }>>(
     "PRAGMA table_info(question_bank_previews)"
   );
+  if (!previewColumns.some((column) => column.name === "import_mode")) {
+    await db.exec(
+      "ALTER TABLE question_bank_previews ADD COLUMN import_mode TEXT NOT NULL DEFAULT 'update';"
+    );
+  }
   if (!previewColumns.some((column) => column.name === "base_updated_at")) {
     await db.exec("BEGIN TRANSACTION");
     try {
@@ -274,5 +293,163 @@ export async function migrate(db: AppDb) {
     await db.run(
       "INSERT INTO app_settings (key, value) VALUES ('default_exam_seeded', '1')"
     );
+  }
+}
+
+async function createIndexes(db: AppDb) {
+  await db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_questions_bank ON questions(quiz_bank_id);
+    CREATE INDEX IF NOT EXISTS idx_questions_chapter_type ON questions(chapter, type);
+    CREATE INDEX IF NOT EXISTS idx_progress_user_bank_status
+      ON user_progress(user_id, quiz_bank_id, status);
+    CREATE INDEX IF NOT EXISTS idx_daily_logs_user_bank_date
+      ON daily_logs(user_id, quiz_bank_id, date);
+    CREATE INDEX IF NOT EXISTS idx_exam_schedules_exam_at ON exam_schedules(exam_at);
+    CREATE INDEX IF NOT EXISTS idx_exam_attempts_user_status
+      ON exam_attempts(user_id, status, deadline_at);
+    CREATE INDEX IF NOT EXISTS idx_exam_attempts_records
+      ON exam_attempts(user_id, submitted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_question_bank_previews_expires
+      ON question_bank_previews(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_question_bank_versions_created
+      ON question_bank_versions(created_at DESC);
+  `);
+}
+
+async function migrateQuestionBankPreviews(db: AppDb) {
+  const columns = await db.all<Array<{ name: string; notnull: number }>>(
+    "PRAGMA table_info(question_bank_previews)"
+  );
+  const quizBankColumn = columns.find((column) => column.name === "quiz_bank_id");
+  const hasImportMode = columns.some((column) => column.name === "import_mode");
+  const hasBaseUpdatedAt = columns.some((column) => column.name === "base_updated_at");
+  if (quizBankColumn?.notnull !== 1 && hasImportMode && hasBaseUpdatedAt) {
+    return;
+  }
+
+  await db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("BEGIN TRANSACTION;");
+  try {
+    await db.exec(`
+      CREATE TABLE question_bank_previews_new (
+        id TEXT PRIMARY KEY,
+        quiz_bank_id INTEGER,
+        import_mode TEXT NOT NULL DEFAULT 'update',
+        bank_name TEXT NOT NULL,
+        source_file_name TEXT NOT NULL,
+        questions_json TEXT NOT NULL,
+        added_count INTEGER NOT NULL,
+        updated_count INTEGER NOT NULL,
+        removed_count INTEGER NOT NULL,
+        unchanged_count INTEGER NOT NULL,
+        added_ids_json TEXT NOT NULL,
+        updated_ids_json TEXT NOT NULL,
+        removed_ids_json TEXT NOT NULL,
+        base_updated_at TEXT,
+        created_by INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY (quiz_bank_id) REFERENCES quiz_banks(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `);
+
+    const sourceBaseUpdatedAt = hasBaseUpdatedAt ? "base_updated_at" : "''";
+    const sourceImportMode = hasImportMode ? "import_mode" : "'update'";
+    await db.exec(`
+      INSERT INTO question_bank_previews_new
+        (id, quiz_bank_id, import_mode, bank_name, source_file_name, questions_json,
+         added_count, updated_count, removed_count, unchanged_count,
+         added_ids_json, updated_ids_json, removed_ids_json, base_updated_at,
+         created_by, created_at, expires_at)
+      SELECT id, quiz_bank_id, ${sourceImportMode}, bank_name, source_file_name, questions_json,
+             added_count, updated_count, removed_count, unchanged_count,
+             added_ids_json, updated_ids_json, removed_ids_json, ${sourceBaseUpdatedAt},
+             created_by, created_at, expires_at
+      FROM question_bank_previews;
+
+      DROP TABLE question_bank_previews;
+      ALTER TABLE question_bank_previews_new RENAME TO question_bank_previews;
+    `);
+    await db.exec("COMMIT;");
+  } catch (error) {
+    await db.exec("ROLLBACK;");
+    throw error;
+  } finally {
+    await db.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
+async function migrateQuestionsCompositeKey(db: AppDb) {
+  const questionTable = await db.get<{ sql: string }>(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'questions'"
+  );
+  if (!questionTable?.sql.includes("id TEXT PRIMARY KEY")) {
+    return;
+  }
+
+  await db.exec("PRAGMA foreign_keys = OFF;");
+  await db.exec("BEGIN TRANSACTION;");
+  try {
+    await db.exec(`
+      CREATE TABLE questions_new (
+        id TEXT NOT NULL,
+        quiz_bank_id INTEGER NOT NULL,
+        question TEXT NOT NULL,
+        options_json TEXT NOT NULL,
+        correct_answer TEXT NOT NULL,
+        chapter TEXT,
+        type TEXT NOT NULL,
+        explanation TEXT,
+        PRIMARY KEY (quiz_bank_id, id),
+        FOREIGN KEY (quiz_bank_id) REFERENCES quiz_banks(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO questions_new
+        (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+      SELECT id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation
+      FROM questions;
+
+      CREATE TABLE user_progress_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        quiz_bank_id INTEGER NOT NULL,
+        question_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'unseen',
+        total_attempts INTEGER NOT NULL DEFAULT 0,
+        correct_count INTEGER NOT NULL DEFAULT 0,
+        wrong_count INTEGER NOT NULL DEFAULT 0,
+        consecutive_correct INTEGER NOT NULL DEFAULT 0,
+        first_wrong_at TEXT,
+        last_wrong_at TEXT,
+        last_answered_at TEXT,
+        is_marked INTEGER NOT NULL DEFAULT 0,
+        wrong_history_json TEXT,
+        UNIQUE(user_id, quiz_bank_id, question_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (quiz_bank_id, question_id) REFERENCES questions_new(quiz_bank_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (quiz_bank_id) REFERENCES quiz_banks(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO user_progress_new
+        (id, user_id, quiz_bank_id, question_id, status, total_attempts, correct_count,
+         wrong_count, consecutive_correct, first_wrong_at, last_wrong_at, last_answered_at,
+         is_marked, wrong_history_json)
+      SELECT id, user_id, quiz_bank_id, question_id, status, total_attempts, correct_count,
+             wrong_count, consecutive_correct, first_wrong_at, last_wrong_at, last_answered_at,
+             is_marked, wrong_history_json
+      FROM user_progress;
+
+      DROP TABLE user_progress;
+      DROP TABLE questions;
+      ALTER TABLE questions_new RENAME TO questions;
+      ALTER TABLE user_progress_new RENAME TO user_progress;
+    `);
+    await db.exec("COMMIT;");
+  } catch (error) {
+    await db.exec("ROLLBACK;");
+    throw error;
+  } finally {
+    await db.exec("PRAGMA foreign_keys = ON;");
   }
 }

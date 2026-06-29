@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, RotateCcw } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { Badge, Button, Card, EmptyState } from "../components/ui";
@@ -10,6 +10,8 @@ import type { QuestionDetail } from "../types";
 export function QuestionDetailPage() {
   const auth = useAuth();
   const { id = "" } = useParams();
+  const [searchParams] = useSearchParams();
+  const quizBankId = searchParams.get("bank") ? Number(searchParams.get("bank")) : undefined;
   const [detail, setDetail] = useState<QuestionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -33,11 +35,11 @@ export function QuestionDetailPage() {
     }
 
     api
-      .questionDetail(id)
+      .questionDetail(id, quizBankId)
       .then(setDetail)
       .catch((err) => setError(err instanceof Error ? err.message : "题目加载失败"))
       .finally(() => setLoading(false));
-  }, [auth.isGuest, id]);
+  }, [auth.isGuest, id, quizBankId]);
 
   async function resetProgress() {
     setResetting(true);
@@ -46,7 +48,7 @@ export function QuestionDetailPage() {
       if (auth.isGuest) {
         resetGuestQuestion(id);
       } else {
-        await api.resetQuestion(id);
+        await api.resetQuestion(id, quizBankId);
       }
       setDetail((current) => (current ? { ...current, progress: null } : current));
       setConfirmReset(false);
@@ -89,6 +91,12 @@ export function QuestionDetailPage() {
           {question.question}
         </h1>
 
+        {question.type === "essay" ? (
+          <div className="mt-7 rounded-lg bg-green-50 p-5">
+            <h2 className="font-medium text-success">参考答案</h2>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-ink">{question.correctAnswer}</p>
+          </div>
+        ) : (
         <div className="mt-7 grid gap-3 sm:grid-cols-2">
           {Object.entries(question.options).map(([key, value]) => {
             const isCorrect = correctKeys.includes(key.toUpperCase());
@@ -107,6 +115,7 @@ export function QuestionDetailPage() {
             );
           })}
         </div>
+        )}
 
         <div className="mt-6 rounded-lg bg-cloud p-5">
           <h2 className="font-medium">题目解析</h2>
@@ -200,6 +209,7 @@ function statusLabel(status?: string) {
 }
 
 function labelForType(type: QuestionDetail["question"]["type"]) {
+  if (type === "essay") return "简答题";
   if (type === "multiple") return "多选题";
   if (type === "judge") return "判断题";
   return "单选题";

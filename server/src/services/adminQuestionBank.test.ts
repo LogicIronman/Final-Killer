@@ -104,6 +104,37 @@ test("question bank preview validates and reports exact differences", async () =
   await db.close();
 });
 
+test("creating a new question bank allows reused source question ids", async () => {
+  const db = await setupDb();
+  const preview = await createQuestionBankPreview(db, {
+    mode: "create",
+    questions: [
+      {
+        id: "q1",
+        question: "新科目同名编号",
+        options: { A: "是", B: "否" },
+        correctAnswer: "A",
+        chapter: "第一章",
+        type: "single" as const
+      }
+    ],
+    bankName: "新科目",
+    sourceFileName: "new-bank.json",
+    createdBy: 1
+  });
+
+  const imported = await applyQuestionBankPreview(db, preview.previewId, 1);
+
+  assert.equal(imported.bankName, "新科目");
+  assert.equal(imported.questionCount, 1);
+  assert.equal((await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM quiz_banks"))?.count, 2);
+  assert.equal(
+    (await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM questions WHERE id = 'q1'"))?.count,
+    2
+  );
+  await db.close();
+});
+
 test("import preserves unchanged progress, snapshots old state, and rollback restores it", async () => {
   const db = await setupDb();
   const preview = await createQuestionBankPreview(db, {
@@ -118,7 +149,7 @@ test("import preserves unchanged progress, snapshots old state, and rollback res
   assert.equal((await db.get<{ question: string }>("SELECT question FROM questions WHERE id = 'q2'"))?.question, "已经修改");
   assert.equal(await db.get("SELECT 1 FROM questions WHERE id = 'q-old'"), undefined);
   assert.ok(await db.get("SELECT 1 FROM user_progress WHERE question_id = 'q1'"));
-  assert.equal(await db.get("SELECT 1 FROM user_progress WHERE question_id = 'q2'"), undefined);
+  assert.ok(await db.get("SELECT 1 FROM user_progress WHERE question_id = 'q2'"));
   assert.equal((await listQuestionBankVersions(db)).length, 1);
 
   const rolledBack = await rollbackQuestionBankVersion(db, imported.versionId, 1);

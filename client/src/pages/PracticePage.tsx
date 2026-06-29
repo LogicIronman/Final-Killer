@@ -4,13 +4,16 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { Badge, Button, Card, EmptyState } from "../components/ui";
+import { useLearningSettings } from "../settings";
 import {
   answerGuestQuestion,
+  getGuestExamQuestions,
+  getGuestEssayQuestions,
   getGuestQuestions,
   getGuestReviewQuestions,
   markGuestQuestion
 } from "../guestProgress";
-import type { PracticeMode, Question } from "../types";
+import type { PracticeMode, PracticeViewMode, Question } from "../types";
 
 type Result = {
   isCorrect: boolean;
@@ -24,9 +27,12 @@ type QuestionSessionState = {
   result: Result | null;
 };
 
-export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
+export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
   const auth = useAuth();
+  const settings = useLearningSettings();
   const isReview = mode === "review";
+  const isExam = mode === "exam";
+  const isEssayDrill = mode === "essay";
   const [questions, setQuestions] = useState<Question[]>([]);
   const [index, setIndex] = useState(0);
   const [session, setSession] = useState<Record<string, QuestionSessionState>>({});
@@ -50,9 +56,21 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
     try {
       let nextQuestions: Question[];
       if (auth.isGuest) {
-        nextQuestions = isReview ? getGuestReviewQuestions(10) : getGuestQuestions(10);
+        nextQuestions = isExam
+          ? getGuestExamQuestions(settings.includeEssay)
+          : isEssayDrill
+            ? getGuestEssayQuestions(10)
+          : isReview
+            ? getGuestReviewQuestions(10)
+            : getGuestQuestions(10);
       } else {
-        const response = isReview ? await api.reviewQuestions(10) : await api.newQuestions(10);
+        const response = isExam
+          ? await api.examQuestions(settings.selectedQuizBankId ?? undefined, settings.includeEssay)
+          : isEssayDrill
+            ? await api.essayQuestions(10, settings.selectedQuizBankId ?? undefined)
+          : isReview
+            ? await api.reviewQuestions(10, settings.selectedQuizBankId ?? undefined, settings.includeEssay)
+            : await api.newQuestions(10, settings.selectedQuizBankId ?? undefined, settings.includeEssay);
         nextQuestions = response.questions;
       }
       setQuestions(nextQuestions);
@@ -64,7 +82,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
     } finally {
       setLoading(false);
     }
-  }, [auth.isGuest, isReview]);
+  }, [auth.isGuest, isEssayDrill, isExam, isReview, settings.includeEssay, settings.selectedQuizBankId]);
 
   useEffect(() => {
     void loadQuestions();
@@ -92,14 +110,14 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
   );
 
   const submit = useCallback(async () => {
-    if (!current || !answerText || result || submittingRef.current) return;
+    if (!current || (!answerText && current.type !== "essay") || result || submittingRef.current) return;
 
     submittingRef.current = true;
     setSubmitting(true);
     try {
       const response = auth.isGuest
-        ? answerGuestQuestion(current.id, answerText, mode)
-        : await api.answer(current.id, answerText, mode);
+        ? answerGuestQuestion(current.id, answerText, answerMode(mode))
+        : await api.answer(current.id, answerText, answerMode(mode), current.quizBankId);
       setSession((previous) => ({
         ...previous,
         [current.id]: {
@@ -134,7 +152,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
     if (auth.isGuest) {
       markGuestQuestion(current.id, nextValue);
     } else {
-      await api.mark(current.id, nextValue);
+      await api.mark(current.id, nextValue, current.quizBankId);
     }
   }
 
@@ -142,14 +160,17 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
     function onKeyDown(event: KeyboardEvent) {
       if (!current || event.repeat) return;
       const key = event.key.toUpperCase();
-      if (key.length === 1 && key >= "A" && key <= "E" && current.options[key]) {
+      if (current.type !== "essay" && key.length === 1 && key >= "A" && key <= "E" && current.options[key]) {
         toggleChoice(key);
       }
-      if (/^[1-5]$/.test(event.key)) {
+      if (current.type !== "essay" && /^[1-5]$/.test(event.key)) {
         const optionKey = Object.keys(current.options)[Number(event.key) - 1];
         if (optionKey) toggleChoice(optionKey);
       }
       if (event.key === "Enter") {
+        if (current.type === "essay" && event.target instanceof HTMLTextAreaElement && !event.ctrlKey && !event.metaKey) {
+          return;
+        }
         event.preventDefault();
         if (result) {
           next();
@@ -170,12 +191,13 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
   }, [current, index, next, previous, result, submit, toggleChoice]);
 
   const optionEntries = useMemo(() => (current ? Object.entries(current.options) : []), [current]);
+  const isEssay = current?.type === "essay";
   const reviewStreak = result?.progress.consecutiveCorrect ?? current?.reviewProgress?.consecutiveCorrect ?? 0;
 
   if (loading) {
     return (
       <div className="rounded-2xl bg-cloud p-6 text-sm text-charcoal">
-        {isReview ? "正在整理复习队列..." : "正在抽取新题..."}
+        {isEssayDrill ? "正在抽取简答题..." : isReview ? "正在整理复习队列..." : "正在抽取新题..."}
       </div>
     );
   }
@@ -183,7 +205,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
   if (error) {
     return (
       <EmptyState
-        title={isReview ? "复习模式遇到问题" : "刷题遇到问题"}
+        title={isEssayDrill ? "抽背模式遇到问题" : isReview ? "复习模式遇到问题" : "刷题遇到问题"}
         body={error}
         action={<Button onClick={loadQuestions}>重新加载</Button>}
       />
@@ -193,9 +215,11 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
   if (!current) {
     return (
       <EmptyState
-        title={isReview ? "复习队列已经清空" : "当前没有可抽取的新题"}
+        title={isEssayDrill ? "当前题库没有简答题" : isReview ? "复习队列已经清空" : "当前没有可抽取的新题"}
         body={
-          isReview
+          isEssayDrill
+            ? "抽背模式只使用简答题。请确认当前题库已经导入 type 为 essay 的题目。"
+            : isReview
             ? "当前没有复习中的题目。新题答错后会自动进入这里，连续答对 3 次后离开复习队列。"
             : "你已经完成了所有未做题，或者当前题库尚未初始化。"
         }
@@ -220,6 +244,8 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
             <Badge tone="blue">{current.chapter ?? "未分章"}</Badge>
             <Badge>{labelForType(current.type)}</Badge>
             {isReview ? <Badge tone="danger">复习题</Badge> : null}
+            {isExam ? <Badge tone="blue">考试模式</Badge> : null}
+            {isEssayDrill ? <Badge tone="blue">抽背模式</Badge> : null}
             <Badge>
               {index + 1} / {questions.length}
             </Badge>
@@ -230,49 +256,74 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
           </Button>
         </div>
 
-        <h1 className="mt-6 text-2xl font-medium leading-8 md:text-3xl md:leading-10">
+        <h1 className="mt-3 text-xl font-medium leading-8 md:mt-4 md:text-2xl md:leading-9">
           {current.question}
         </h1>
 
-        <div className="mt-8 grid gap-3">
-          {optionEntries.map(([key, value]) => {
-            const isSelected = selected.includes(key);
-            return (
-              <button
-                key={key}
-                type="button"
-                disabled={Boolean(result)}
-                onClick={() => toggleChoice(key)}
-                className={[
-                  "flex min-h-14 items-start gap-4 rounded-2xl border p-4 text-left transition",
-                  isSelected ? "border-hp-blue bg-hp-soft" : "border-fog bg-white hover:bg-cloud",
-                  result ? "cursor-default" : "cursor-pointer"
-                ].join(" ")}
-              >
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded bg-ink text-sm font-medium text-white">
-                  {key}
-                </span>
-                <span className="leading-7 text-ink">{value}</span>
-              </button>
-            );
-          })}
-        </div>
+        {isEssay ? (
+          <label className="mt-8 block space-y-2">
+            <span className="text-sm font-medium text-charcoal">你的作答</span>
+            <textarea
+              className="min-h-28 w-full resize-y rounded-lg border border-fog bg-white p-4 text-base leading-7 text-ink outline-none transition focus:border-ink disabled:bg-cloud"
+              disabled={Boolean(result)}
+              value={selected[0] ?? ""}
+              placeholder="可以留空，提交后直接查看参考答案。"
+              onChange={(event) =>
+                setSession((previous) => ({
+                  ...previous,
+                  [current.id]: { selected: [event.target.value], result: null }
+                }))
+              }
+            />
+          </label>
+        ) : (
+          <div className="mt-6 grid gap-3">
+            {optionEntries.map(([key, value]) => {
+              const isSelected = selected.includes(key);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  disabled={Boolean(result)}
+                  onClick={() => toggleChoice(key)}
+                  className={[
+                    "flex min-h-14 items-start gap-4 rounded-lg border p-4 text-left transition",
+                    isSelected ? "border-hp-blue bg-hp-soft" : "border-fog bg-white hover:bg-cloud",
+                    result ? "cursor-default" : "cursor-pointer"
+                  ].join(" ")}
+                >
+                  <span className={choiceMarkerClass(current.type)}>
+                    {key}
+                  </span>
+                  <span className="leading-7 text-ink">{value}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {result ? (
-          <div className={["mt-6 rounded-2xl p-5", result.isCorrect ? "bg-green-50" : "bg-red-50"].join(" ")}>
+          <div className={["mb-24 mt-6 rounded-lg p-5 md:mb-6", result.isCorrect ? "bg-green-50" : "bg-red-50"].join(" ")}>
             <div className="flex items-center gap-2 font-medium">
               {result.isCorrect ? (
                 <CheckCircle2 className="h-5 w-5 text-success" aria-hidden />
               ) : (
                 <XCircle className="h-5 w-5 text-danger" aria-hidden />
               )}
-              {result.isCorrect
+              {isEssay
+                ? "参考答案"
+                : result.isCorrect
                 ? isReview && result.progress.status === "done"
                   ? "连续答对 3 次，已完成"
                   : "回答正确"
                 : `回答错误，正确答案：${result.correctAnswer}`}
             </div>
-            <p className="mt-3 text-sm leading-6 text-charcoal">
+            {isEssay ? (
+              <p className="mt-3 whitespace-pre-wrap text-lg leading-8 text-ink">
+                {result.correctAnswer}
+              </p>
+            ) : null}
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-charcoal">
               {result.explanation || "这道题暂无解析。"}
             </p>
           </div>
@@ -289,7 +340,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
               <ChevronRight className="h-4 w-4" aria-hidden />
             </Button>
           ) : (
-            <Button type="button" loading={submitting} disabled={!answerText} onClick={submit}>
+            <Button type="button" loading={submitting} disabled={!isEssay && !answerText} onClick={submit}>
               提交答案
             </Button>
           )}
@@ -298,7 +349,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
 
       <aside className="space-y-4">
         <Card>
-          <h2 className="text-xl font-medium">{isReview ? "复习进度" : "本轮进度"}</h2>
+          <h2 className="text-xl font-medium">{isEssayDrill ? "抽背进度" : isExam ? "考试进度" : isReview ? "复习进度" : "本轮进度"}</h2>
           {isReview ? (
             <div className="mt-5">
               <div className="flex items-center justify-between text-sm text-charcoal">
@@ -325,13 +376,25 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
             />
           </div>
           <p className="mt-4 text-sm leading-6 text-charcoal">
-            A-E 或 1-5 选择，Enter 提交；答题后再按 Enter 进入下一题。左右箭头可回看或前进。
+            {isEssayDrill ? "抽背模式只出现简答题，提交后直接查看参考答案。" : isExam ? "考试模式按单选、判断、多选、简答分段组卷。" : "A-E 或 1-5 选择，Enter 提交；答题后再按 Enter 进入下一题。左右箭头可回看或前进。"}
           </p>
         </Card>
         <Card>
           <h2 className="text-xl font-medium">状态规则</h2>
           <ul className="mt-4 space-y-3 text-sm leading-6 text-charcoal">
-            {isReview ? (
+            {isEssayDrill ? (
+              <>
+                <li>题型：只抽简答题。</li>
+                <li>提交：允许留空，提交后显示参考答案。</li>
+                <li>计数：提交后计入刷题进度。</li>
+              </>
+            ) : isExam ? (
+              <>
+                <li>组卷：20 单选、10 判断、5 多选。</li>
+                <li>简答：开启且题库存在时追加 2 题。</li>
+                <li>提交：沿用普通刷题的判分与进度规则。</li>
+              </>
+            ) : isReview ? (
               <>
                 <li>答对：连续次数加 1。</li>
                 <li>答错：连续次数归零。</li>
@@ -351,7 +414,18 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeMode }) {
   );
 }
 
+function answerMode(mode: PracticeViewMode): PracticeMode {
+  return mode === "review" ? "review" : "new";
+}
+
+function choiceMarkerClass(type: Question["type"]) {
+  const base = "grid shrink-0 place-items-center bg-ink text-sm font-medium text-white";
+  if (type === "multiple") return `${base} h-7 min-w-11 rounded`;
+  return `${base} h-7 w-7 rounded`;
+}
+
 function labelForType(type: Question["type"]) {
+  if (type === "essay") return "简答题";
   if (type === "multiple") return "多选题";
   if (type === "judge") return "判断题";
   return "单选题";

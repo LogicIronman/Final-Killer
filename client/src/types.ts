@@ -1,5 +1,6 @@
-export type QuestionType = "single" | "multiple" | "judge";
+export type QuestionType = "single" | "multiple" | "judge" | "essay";
 export type PracticeMode = "new" | "review";
+export type PracticeViewMode = PracticeMode | "exam" | "essay";
 
 export interface User {
   id: number;
@@ -70,6 +71,13 @@ export interface Stats {
   };
 }
 
+export interface QuizBank {
+  id: number;
+  name: string;
+  description: string | null;
+  questionCount: number;
+}
+
 export interface WrongAnswer extends Question {
   wrongCount: number;
   consecutiveCorrect: number;
@@ -95,8 +103,76 @@ export interface LeaderboardEntry {
   isCurrentUser: boolean;
 }
 
+export type ExamAttemptStatus = "active" | "submitted" | "expired";
+export type ExamSubmitReason = "manual" | "timeout";
+
+export interface ExamAnswerState {
+  answer: string;
+  answeredAt: string;
+  isCorrect?: boolean;
+  correctAnswer?: string;
+  explanation?: string | null;
+  gradedAt?: string;
+}
+
+export interface ExamSummaryRow {
+  type: QuestionType;
+  label: string;
+  total: number;
+  answered: number;
+  correct: number;
+  wrong: number;
+  score: number;
+  possibleScore: number;
+}
+
+export interface ExamSummary {
+  score: number;
+  totalScore: number;
+  answeredCount: number;
+  questionCount: number;
+  objectiveWrongCount: number;
+  essayCount: number;
+  essayAnsweredCount: number;
+  byType: ExamSummaryRow[];
+}
+
+export interface ExamAttempt {
+  id: number;
+  quizBankId: number;
+  status: ExamAttemptStatus;
+  questions: Question[];
+  answers: Record<string, ExamAnswerState>;
+  summary: ExamSummary;
+  includeEssay: boolean;
+  durationSeconds: number;
+  startedAt: string;
+  deadlineAt: string;
+  submittedAt: string | null;
+  submitReason: string | null;
+}
+
+export interface ExamAttemptRecord {
+  id: number;
+  quizBankId: number;
+  quizBankName: string;
+  status: ExamAttemptStatus;
+  score: number;
+  totalScore: number;
+  questionCount: number;
+  answeredCount: number;
+  objectiveWrongCount: number;
+  essayCount: number;
+  startedAt: string;
+  deadlineAt: string;
+  submittedAt: string | null;
+  submitReason: string | null;
+}
+
 export interface QuestionBankPreview {
   previewId: string;
+  mode: "create" | "update";
+  quizBankId: number | null;
   bankName: string;
   sourceFileName: string;
   currentCount: number;
@@ -118,11 +194,12 @@ export interface QuestionBankVersion {
   questionCount: number;
   createdBy: number;
   createdAt: string;
-  reason: "import" | "rollback";
+  reason: "import" | "rollback" | "create";
 }
 
 export interface QuestionBankAdminState {
   bank: { id: number; name: string; questionCount: number };
+  banks: QuizBank[];
   latestVersion: QuestionBankVersion | null;
   versions: QuestionBankVersion[];
 }

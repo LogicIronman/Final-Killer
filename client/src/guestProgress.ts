@@ -1,6 +1,9 @@
 import questions from "../../data/questions.json";
 import type {
   PracticeMode,
+  ExamAttempt,
+  ExamAttemptRecord,
+  ExamSubmitReason,
   Question,
   QuestionDetail,
   QuestionProgress,
@@ -24,6 +27,7 @@ interface GuestProgress {
 }
 
 const STORAGE_KEY = "final-killer-guest-progress";
+const GUEST_EXAM_KEY = "final-killer-guest-exam-attempts";
 const questionList = questions as Question[];
 
 export function getGuestQuestions(limit = 10) {
@@ -61,6 +65,137 @@ export function getGuestReviewQuestions(limit = 10) {
       }
     };
   });
+}
+
+export function getGuestExamQuestions(includeEssay = false) {
+  return [
+    ...takeByType("single", 20),
+    ...takeByType("judge", 10),
+    ...takeByType("multiple", 5),
+    ...(includeEssay ? takeByType("essay", 2) : [])
+  ];
+}
+
+export function getGuestEssayQuestions(limit = 10) {
+  return takeByType("essay", limit);
+}
+
+export function startGuestExamAttempt(includeEssay = false) {
+  const current = getGuestCurrentExamAttempt();
+  if (current?.status === "active") return current;
+  const attempts = readGuestExamAttempts();
+  const now = new Date();
+  const attempt: ExamAttempt = {
+    id: Date.now(),
+    quizBankId: 0,
+    status: "active",
+    questions: getGuestExamQuestions(includeEssay).map((question) => ({ ...question, quizBankId: 0 })),
+    answers: {},
+    summary: emptyExamSummary(),
+    includeEssay,
+    durationSeconds: 2400,
+    startedAt: now.toISOString(),
+    deadlineAt: new Date(now.getTime() + 2400 * 1000).toISOString(),
+    submittedAt: null,
+    submitReason: null
+  };
+  writeGuestExamAttempts([attempt, ...attempts]);
+  return attempt;
+}
+
+export function getGuestCurrentExamAttempt() {
+  const attempt = readGuestExamAttempts().find((item) => item.status === "active") ?? null;
+  if (!attempt) return null;
+  if (new Date(attempt.deadlineAt).getTime() <= Date.now()) {
+    return submitGuestExamAttempt(attempt.id, "timeout");
+  }
+  return attempt;
+}
+
+export function answerGuestExamAttemptQuestion(attemptId: number, questionId: string, answer: string) {
+  const attempts = readGuestExamAttempts();
+  const attempt = attempts.find((item) => item.id === attemptId);
+  if (!attempt) throw new Error("考试记录不存在");
+  if (attempt.status !== "active") throw new Error("考试已经提交");
+  if (new Date(attempt.deadlineAt).getTime() <= Date.now()) {
+    submitGuestExamAttempt(attempt.id, "timeout");
+    throw new Error("考试已超时并自动提交");
+  }
+  if (attempt.answers[questionId]?.gradedAt) {
+    return attempt;
+  }
+  const result = answerGuestQuestion(questionId, answer, "new");
+  const gradedAt = new Date().toISOString();
+  attempt.answers = {
+    ...attempt.answers,
+    [questionId]: {
+      answer,
+      answeredAt: gradedAt,
+      isCorrect: result.isCorrect,
+      correctAnswer: result.correctAnswer,
+      explanation: result.explanation,
+      gradedAt
+    }
+  };
+  writeGuestExamAttempts(attempts);
+  return attempt;
+}
+
+export function submitGuestExamAttempt(attemptId: number, reason: ExamSubmitReason = "manual") {
+  const attempts = readGuestExamAttempts();
+  const attempt = attempts.find((item) => item.id === attemptId);
+  if (!attempt) throw new Error("考试记录不存在");
+  if (attempt.status !== "active") return attempt;
+  for (const question of attempt.questions) {
+    const answer = attempt.answers[question.id];
+    if (!answer || answer.gradedAt) continue;
+    const result = answerGuestQuestion(question.id, answer.answer, "new");
+    attempt.answers[question.id] = {
+      ...answer,
+      isCorrect: result.isCorrect,
+      correctAnswer: result.correctAnswer,
+      explanation: result.explanation,
+      gradedAt: new Date().toISOString()
+    };
+  }
+  attempt.summary = calculateGuestExamSummary(attempt.questions, attempt.answers);
+  attempt.status = reason === "timeout" ? "expired" : "submitted";
+  attempt.submittedAt = new Date().toISOString();
+  attempt.submitReason = reason;
+  writeGuestExamAttempts(attempts);
+  return attempt;
+}
+
+export function getGuestExamAttemptRecords(): ExamAttemptRecord[] {
+  return readGuestExamAttempts()
+    .map((attempt) => (attempt.status === "active" && new Date(attempt.deadlineAt).getTime() <= Date.now()
+      ? submitGuestExamAttempt(attempt.id, "timeout")
+      : attempt))
+    .filter((attempt) => attempt.status !== "active")
+    .map((attempt) => ({
+      id: attempt.id,
+      quizBankId: attempt.quizBankId,
+      quizBankName: "游客本地题库",
+      status: attempt.status,
+      score: attempt.summary.score,
+      totalScore: attempt.summary.totalScore,
+      questionCount: attempt.summary.questionCount,
+      answeredCount: attempt.summary.answeredCount,
+      objectiveWrongCount: attempt.summary.objectiveWrongCount,
+      essayCount: attempt.summary.essayCount,
+      startedAt: attempt.startedAt,
+      deadlineAt: attempt.deadlineAt,
+      submittedAt: attempt.submittedAt,
+      submitReason: attempt.submitReason
+    }));
+}
+
+export function getGuestExamAttempt(attemptId: number) {
+  const attempt = readGuestExamAttempts().find((item) => item.id === attemptId);
+  if (!attempt) throw new Error("考试记录不存在");
+  return attempt.status === "active" && new Date(attempt.deadlineAt).getTime() <= Date.now()
+    ? submitGuestExamAttempt(attempt.id, "timeout")
+    : attempt;
 }
 
 export function answerGuestQuestion(
@@ -250,7 +385,20 @@ function writeProgress(progress: Record<string, GuestProgress>) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
 }
 
+function readGuestExamAttempts(): ExamAttempt[] {
+  try {
+    return JSON.parse(localStorage.getItem(GUEST_EXAM_KEY) ?? "[]") as ExamAttempt[];
+  } catch {
+    return [];
+  }
+}
+
+function writeGuestExamAttempts(attempts: ExamAttempt[]) {
+  localStorage.setItem(GUEST_EXAM_KEY, JSON.stringify(attempts));
+}
+
 function grade(question: Question, answer: string) {
+  if (question.type === "essay") return true;
   return normalize(answer, question) === normalize(question.correctAnswer ?? "", question);
 }
 
@@ -259,6 +407,7 @@ function normalizeAnswer(question: Question) {
 }
 
 function normalize(value: string, question: Question) {
+  if (question.type === "essay") return value.trim();
   if (question.type === "judge") {
     const trimmed = value.trim();
     const found = Object.entries(question.options).find(([, label]) => label === trimmed);
@@ -274,4 +423,68 @@ function normalize(value: string, question: Question) {
 
 function shuffle<T>(items: T[]) {
   return [...items].sort(() => Math.random() - 0.5);
+}
+
+function takeByType(type: Question["type"], limit: number) {
+  const progress = readProgress();
+  return shuffle(questionList.filter((question) => question.type === type))
+    .slice(0, limit)
+    .map((question) => ({ ...question, isMarked: progress[question.id]?.isMarked ?? false }));
+}
+
+function calculateGuestExamSummary(questions: Question[], answers: ExamAttempt["answers"]): ExamAttempt["summary"] {
+  const byType = (["single", "judge", "multiple", "essay"] as Question["type"][]).map((type) => {
+    const typed = questions.filter((question) => question.type === type);
+    const point = pointsForType(type);
+    let correct = 0;
+    for (const question of typed) {
+      const answer = answers[question.id]?.answer;
+      const stored = answers[question.id];
+      if (type === "essay" || answer == null) continue;
+      if (typeof stored?.isCorrect === "boolean") {
+        if (stored.isCorrect) correct += 1;
+        continue;
+      }
+      if (grade(question, answer)) correct += 1;
+    }
+    return {
+      type,
+      label: labelForType(type),
+      total: typed.length,
+      answered: typed.filter((question) => answers[question.id]).length,
+      correct,
+      wrong: type === "essay" ? 0 : typed.length - correct,
+      score: correct * point,
+      possibleScore: typed.length * point
+    };
+  });
+  const essay = byType.find((row) => row.type === "essay");
+  return {
+    score: byType.reduce((sum, row) => sum + row.score, 0),
+    totalScore: byType.reduce((sum, row) => sum + row.possibleScore, 0),
+    answeredCount: Object.keys(answers).length,
+    questionCount: questions.length,
+    objectiveWrongCount: byType.filter((row) => row.type !== "essay").reduce((sum, row) => sum + row.wrong, 0),
+    essayCount: essay?.total ?? 0,
+    essayAnsweredCount: essay?.answered ?? 0,
+    byType
+  };
+}
+
+function emptyExamSummary(): ExamAttempt["summary"] {
+  return calculateGuestExamSummary([], {});
+}
+
+function pointsForType(type: Question["type"]) {
+  if (type === "single") return 2;
+  if (type === "judge") return 1;
+  if (type === "multiple") return 4;
+  return 0;
+}
+
+function labelForType(type: Question["type"]) {
+  if (type === "single") return "单选题";
+  if (type === "judge") return "判断题";
+  if (type === "multiple") return "多选题";
+  return "简答题";
 }

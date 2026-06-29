@@ -21,8 +21,12 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 export function AdminQuestionBankPage() {
   const auth = useAuth();
   const [state, setState] = useState<QuestionBankAdminState | null>(null);
+  const [mode, setMode] = useState<"create" | "update">("update");
+  const [targetBankId, setTargetBankId] = useState<number | null>(null);
   const [bankName, setBankName] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [fileText, setFileText] = useState<string | null>(null);
+  const [fileReadError, setFileReadError] = useState("");
   const [preview, setPreview] = useState<QuestionBankPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -36,7 +40,9 @@ export function AdminQuestionBankPage() {
     try {
       const nextState = await api.questionBankAdmin();
       setState(nextState);
-      setBankName((current) => current || nextState.bank.name);
+      const firstBank = nextState.banks[0] ?? nextState.bank;
+      setTargetBankId((current) => current ?? firstBank.id);
+      setBankName((current) => current || firstBank.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : "题库信息加载失败");
     } finally {
@@ -63,8 +69,18 @@ export function AdminQuestionBankPage() {
     setSuccess("");
     setPreview(null);
     try {
-      const questions = JSON.parse(await file.text()) as unknown;
+      if (fileReadError) {
+        setError(fileReadError);
+        return;
+      }
+      if (fileText == null) {
+        setError("文件仍在读取中，请稍后再试");
+        return;
+      }
+      const questions = JSON.parse(fileText) as unknown;
       const response = await api.previewQuestionBank({
+        mode,
+        quizBankId: mode === "update" ? targetBankId ?? undefined : undefined,
         bankName,
         sourceFileName: file.name,
         questions
@@ -83,9 +99,15 @@ export function AdminQuestionBankPage() {
     setError("");
     try {
       const result = await api.importQuestionBank(preview.previewId);
-      setSuccess(`已导入 ${result.questionCount} 道题，旧题库已保存为版本 #${result.versionId}。`);
+      setSuccess(
+        mode === "create"
+          ? `已新建题库“${result.bankName}”，共 ${result.questionCount} 道题。`
+          : `已更新 ${result.questionCount} 道题，旧题库已保存为版本 #${result.versionId}。`
+      );
       setPreview(null);
       setFile(null);
+      setFileText(null);
+      setFileReadError("");
       await loadState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "题库导入失败");
@@ -155,6 +177,48 @@ export function AdminQuestionBankPage() {
 
           <div className="mt-6 grid gap-5 sm:grid-cols-2">
             <label className="block space-y-2">
+              <span className="text-sm font-medium">导入方式</span>
+              <select
+                className="h-11 w-full rounded border border-steel bg-white px-4 text-base text-ink outline-none focus:border-ink"
+                value={mode}
+                onChange={(event) => {
+                  const nextMode = event.target.value as "create" | "update";
+                  setMode(nextMode);
+                  setPreview(null);
+                  if (nextMode === "create") setBankName("");
+                  if (nextMode === "update") {
+                    const bank = state?.banks.find((item) => item.id === targetBankId) ?? state?.banks[0];
+                    setBankName(bank?.name ?? "");
+                    setTargetBankId(bank?.id ?? null);
+                  }
+                }}
+              >
+                <option value="update">更新已有题库</option>
+                <option value="create">导入为新题库</option>
+              </select>
+            </label>
+            {mode === "update" ? (
+              <label className="block space-y-2">
+                <span className="text-sm font-medium">目标题库</span>
+                <select
+                  className="h-11 w-full rounded border border-steel bg-white px-4 text-base text-ink outline-none focus:border-ink"
+                  value={targetBankId ?? ""}
+                  onChange={(event) => {
+                    const id = Number(event.target.value);
+                    setTargetBankId(id);
+                    setBankName(state?.banks.find((bank) => bank.id === id)?.name ?? "");
+                    setPreview(null);
+                  }}
+                >
+                  {state?.banks.map((bank) => (
+                    <option key={bank.id} value={bank.id}>
+                      {bank.name}（{bank.questionCount} 题）
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <label className="block space-y-2">
               <span className="text-sm font-medium">题库名称</span>
               <Input value={bankName} maxLength={100} onChange={(event) => setBankName(event.target.value)} />
             </label>
@@ -165,9 +229,22 @@ export function AdminQuestionBankPage() {
                 accept="application/json,.json"
                 className="block min-h-11 w-full rounded border border-steel bg-white text-sm text-charcoal file:mr-4 file:min-h-11 file:border-0 file:bg-cloud file:px-4 file:font-medium file:text-ink hover:file:bg-hp-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-hp-blue"
                 onChange={(event) => {
-                  setFile(event.target.files?.[0] ?? null);
+                  const nextFile = event.target.files?.[0] ?? null;
+                  setFile(nextFile);
+                  setFileText(null);
+                  setFileReadError("");
                   setPreview(null);
                   setSuccess("");
+                  setError("");
+                  if (!nextFile) return;
+                  void nextFile
+                    .text()
+                    .then(setFileText)
+                    .catch(() => {
+                      setFileReadError(
+                        "无法读取这个文件。请确认文件没有被移动、删除、云盘占用或权限限制；建议复制到本地普通目录后重新选择。"
+                      );
+                    });
                 }}
               />
             </label>
@@ -186,7 +263,7 @@ export function AdminQuestionBankPage() {
           <p className="mt-3 text-2xl font-medium text-ink">{state?.bank.name ?? "-"}</p>
           <p className="mt-2 text-sm text-charcoal">{state?.bank.questionCount ?? 0} 道题</p>
           <div className="mt-6 border-t border-fog pt-5 text-sm leading-6 text-charcoal">
-            导入仅重置内容变更或删除题目的学习记录，未变化题目的进度会继续保留。
+            更新已有题库时会保留已有题目的答题进度和计数；导入为新题库时会新增一个独立科目。
           </div>
         </aside>
       </section>
@@ -224,7 +301,13 @@ export function AdminQuestionBankPage() {
                     <td className="px-4 py-4">{version.bankName}</td>
                     <td className="px-4 py-4 tabular-nums">{version.questionCount}</td>
                     <td className="px-4 py-4 text-charcoal">{formatDate(version.createdAt)}</td>
-                    <td className="px-4 py-4 text-charcoal">{version.reason === "import" ? "导入前备份" : "回滚前备份"}</td>
+                    <td className="px-4 py-4 text-charcoal">
+                      {version.reason === "import"
+                        ? "导入前备份"
+                        : version.reason === "create"
+                          ? "新建题库记录"
+                          : "回滚前备份"}
+                    </td>
                     <td className="px-4 py-4 text-right">
                       {rollbackId === version.id ? (
                         <div className="flex justify-end gap-2">
@@ -277,12 +360,14 @@ function DiffPreview({
         </div>
         <div className="flex gap-3">
           <Button variant="ghost" disabled={working} onClick={onCancel}>取消</Button>
-          <Button loading={working} onClick={onImport}>备份并导入</Button>
+          <Button loading={working} onClick={onImport}>
+            {preview.mode === "create" ? "创建题库" : "备份并更新"}
+          </Button>
         </div>
       </div>
 
       <div className="mt-6 flex flex-wrap gap-x-8 gap-y-4 border-y border-fog py-5">
-        <DiffMetric label="导入后" value={preview.nextCount} />
+        <DiffMetric label={preview.mode === "create" ? "新题库题数" : "导入后"} value={preview.nextCount} />
         <DiffMetric label="新增" value={preview.addedCount} tone="success" />
         <DiffMetric label="修改" value={preview.updatedCount} tone="blue" />
         <DiffMetric label="删除" value={preview.removedCount} tone="danger" />

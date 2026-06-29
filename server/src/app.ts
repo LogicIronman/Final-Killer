@@ -5,10 +5,12 @@ import { config } from "./config.js";
 import { migrate, getDb } from "./db.js";
 import { sendError } from "./lib/api.js";
 import authRouter from "./routes/auth.js";
+import examAttemptsRouter from "./routes/examAttempts.js";
 import examsRouter from "./routes/exams.js";
 import leaderboardRouter from "./routes/leaderboard.js";
 import progressRouter from "./routes/progress.js";
 import questionsRouter from "./routes/questions.js";
+import quizBanksRouter from "./routes/quizBanks.js";
 import adminQuestionBankRouter from "./routes/adminQuestionBank.js";
 import { ensureQuestionBank } from "./services/questionBank.js";
 import { ensureAdminUser } from "./services/auth.js";
@@ -29,8 +31,10 @@ export async function createApp() {
 
   app.use("/api/auth", authRouter);
   app.use("/api/admin/question-bank", adminQuestionBankRouter);
+  app.use("/api/exam-attempts", examAttemptsRouter);
   app.use("/api/exams", examsRouter);
   app.use("/api/leaderboard", leaderboardRouter);
+  app.use("/api/quiz-banks", quizBanksRouter);
   app.use("/api/questions", questionsRouter);
   app.use("/api/progress", progressRouter);
 

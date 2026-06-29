@@ -1,4 +1,4 @@
-export type QuestionType = "single" | "multiple" | "judge";
+export type QuestionType = "single" | "multiple" | "judge" | "essay";
 export type ProgressStatus = "unseen" | "reviewing" | "done";
 export type PracticeMode = "new" | "review";
 

@@ -3,8 +3,11 @@ import { gradeAnswer } from "../lib/grading.js";
 import type { PracticeMode, ProgressStatus, QuestionRow } from "../types.js";
 import { getDefaultQuizBank, toPublicQuestion } from "./questionBank.js";
 
-export async function getNewQuestions(db: AppDb, userId: number, limit: number) {
-  const bank = await getDefaultQuizBank(db);
+type BankScope = { quizBankId?: number; includeEssay?: boolean };
+type ExamScope = BankScope;
+
+export async function getNewQuestions(db: AppDb, userId: number, limit: number, scope: BankScope = {}) {
+  const bankId = await resolveQuizBankId(db, scope.quizBankId);
   const rows = await db.all<QuestionRow[]>(
     `SELECT q.*, COALESCE(p.is_marked, 0) AS is_marked
      FROM questions q
@@ -13,25 +16,90 @@ export async function getNewQuestions(db: AppDb, userId: number, limit: number) 
       AND p.user_id = ?
       AND p.quiz_bank_id = q.quiz_bank_id
      WHERE q.quiz_bank_id = ?
+       AND (? = 1 OR q.type <> 'essay')
        AND (p.id IS NULL OR p.status = 'unseen')
-     ORDER BY RANDOM()
+     ORDER BY
+       CASE q.type
+         WHEN 'single' THEN 0
+         WHEN 'judge' THEN 1
+         WHEN 'multiple' THEN 2
+         WHEN 'essay' THEN 3
+         ELSE 4
+       END,
+       RANDOM()
      LIMIT ?`,
     userId,
-    bank.id,
+    bankId,
+    scope.includeEssay ? 1 : 0,
     limit
   );
 
   return rows.map(toPublicQuestion);
 }
 
-export async function getReviewQuestions(db: AppDb, userId: number, limit: number) {
-  const bank = await getDefaultQuizBank(db);
+export async function getExamQuestions(db: AppDb, userId: number, scope: ExamScope = {}) {
+  const bankId = await resolveQuizBankId(db, scope.quizBankId);
+  const sections = [
+    { type: "single", limit: 20 },
+    { type: "judge", limit: 10 },
+    { type: "multiple", limit: 5 },
+    ...(scope.includeEssay ? [{ type: "essay", limit: 2 }] : [])
+  ] as const;
+  const result: QuestionRow[] = [];
+
+  for (const section of sections) {
+    const rows = await db.all<QuestionRow[]>(
+      `SELECT q.*, COALESCE(p.is_marked, 0) AS is_marked
+       FROM questions q
+       LEFT JOIN user_progress p
+         ON p.question_id = q.id
+        AND p.user_id = ?
+        AND p.quiz_bank_id = q.quiz_bank_id
+       WHERE q.quiz_bank_id = ?
+         AND q.type = ?
+       ORDER BY RANDOM()
+       LIMIT ?`,
+      userId,
+      bankId,
+      section.type,
+      section.limit
+    );
+    result.push(...rows);
+  }
+
+  return result.map(toPublicQuestion);
+}
+
+export async function getEssayQuestions(db: AppDb, userId: number, limit: number, scope: BankScope = {}) {
+  const bankId = await resolveQuizBankId(db, scope.quizBankId);
+  const rows = await db.all<QuestionRow[]>(
+    `SELECT q.*, COALESCE(p.is_marked, 0) AS is_marked
+     FROM questions q
+     LEFT JOIN user_progress p
+       ON p.question_id = q.id
+      AND p.user_id = ?
+      AND p.quiz_bank_id = q.quiz_bank_id
+     WHERE q.quiz_bank_id = ?
+       AND q.type = 'essay'
+     ORDER BY RANDOM()
+     LIMIT ?`,
+    userId,
+    bankId,
+    limit
+  );
+
+  return rows.map(toPublicQuestion);
+}
+
+export async function getReviewQuestions(db: AppDb, userId: number, limit: number, scope: BankScope = {}) {
+  const bankId = await resolveQuizBankId(db, scope.quizBankId);
   const rows = await db.all<QuestionRow[]>(
     `SELECT q.*, p.is_marked, p.consecutive_correct, p.wrong_count
      FROM user_progress p
      JOIN questions q ON q.id = p.question_id
      WHERE p.user_id = ?
        AND p.quiz_bank_id = ?
+       AND (? = 1 OR q.type <> 'essay')
        AND p.status = 'reviewing'
      ORDER BY
        p.consecutive_correct ASC,
@@ -39,7 +107,8 @@ export async function getReviewQuestions(db: AppDb, userId: number, limit: numbe
        RANDOM()
      LIMIT ?`,
     userId,
-    bank.id,
+    bankId,
+    scope.includeEssay ? 1 : 0,
     limit
   );
 
@@ -48,11 +117,13 @@ export async function getReviewQuestions(db: AppDb, userId: number, limit: numbe
 
 export async function answerQuestion(
   db: AppDb,
-  params: { userId: number; questionId: string; answer: string; mode: PracticeMode }
+  params: { userId: number; questionId: string; quizBankId?: number; answer: string; mode: PracticeMode }
 ) {
   const question = await db.get<QuestionRow>(
-    "SELECT * FROM questions WHERE id = ?",
-    params.questionId
+    params.quizBankId
+      ? "SELECT * FROM questions WHERE quiz_bank_id = ? AND id = ?"
+      : "SELECT * FROM questions WHERE id = ? ORDER BY quiz_bank_id LIMIT 1",
+    ...(params.quizBankId ? [params.quizBankId, params.questionId] : [params.questionId])
   );
 
   if (!question) {
@@ -162,8 +233,13 @@ export async function answerQuestion(
   };
 }
 
-export async function getStats(db: AppDb, userId: number) {
-  const bank = await getDefaultQuizBank(db);
+export async function getStats(db: AppDb, userId: number, quizBankId?: number) {
+  const bankId = await resolveQuizBankId(db, quizBankId);
+  const bank = await db.get<{ id: number; name: string; question_count: number }>(
+    "SELECT id, name, question_count FROM quiz_banks WHERE id = ?",
+    bankId
+  );
+  if (!bank) throw new Error("题库不存在");
   const totals = await db.get<{
     total: number;
     done: number;
@@ -217,8 +293,8 @@ export async function getStats(db: AppDb, userId: number) {
   };
 }
 
-export async function getWrongAnswers(db: AppDb, userId: number) {
-  const bank = await getDefaultQuizBank(db);
+export async function getWrongAnswers(db: AppDb, userId: number, quizBankId?: number) {
+  const bankId = await resolveQuizBankId(db, quizBankId);
   const rows = await db.all<
     Array<
       QuestionRow & {
@@ -237,7 +313,7 @@ export async function getWrongAnswers(db: AppDb, userId: number) {
        AND p.wrong_count > 0
      ORDER BY p.last_answered_at DESC`,
     userId,
-    bank.id
+    bankId
   );
 
   return rows.map((row) => ({
@@ -249,8 +325,8 @@ export async function getWrongAnswers(db: AppDb, userId: number) {
   }));
 }
 
-export async function getMarkedQuestions(db: AppDb, userId: number) {
-  const bank = await getDefaultQuizBank(db);
+export async function getMarkedQuestions(db: AppDb, userId: number, quizBankId?: number) {
+  const bankId = await resolveQuizBankId(db, quizBankId);
   const rows = await db.all<QuestionRow[]>(
     `SELECT q.*, p.is_marked
      FROM user_progress p
@@ -260,14 +336,14 @@ export async function getMarkedQuestions(db: AppDb, userId: number) {
        AND p.is_marked = 1
      ORDER BY COALESCE(p.last_answered_at, '') DESC, q.id ASC`,
     userId,
-    bank.id
+    bankId
   );
 
   return rows.map(toPublicQuestion);
 }
 
-export async function getCompletedQuestions(db: AppDb, userId: number) {
-  const bank = await getDefaultQuizBank(db);
+export async function getCompletedQuestions(db: AppDb, userId: number, quizBankId?: number) {
+  const bankId = await resolveQuizBankId(db, quizBankId);
   const rows = await db.all<QuestionRow[]>(
     `SELECT q.*, p.is_marked, p.consecutive_correct, p.wrong_count
      FROM user_progress p
@@ -277,13 +353,13 @@ export async function getCompletedQuestions(db: AppDb, userId: number) {
        AND p.status = 'done'
      ORDER BY p.last_answered_at DESC, q.id ASC`,
     userId,
-    bank.id
+    bankId
   );
 
   return rows.map(toPublicQuestion);
 }
 
-export async function getQuestionDetail(db: AppDb, userId: number, questionId: string) {
+export async function getQuestionDetail(db: AppDb, userId: number, questionId: string, quizBankId?: number) {
   const row = await db.get<
     QuestionRow & {
       status: ProgressStatus | null;
@@ -310,9 +386,14 @@ export async function getQuestionDetail(db: AppDb, userId: number, questionId: s
        ON p.question_id = q.id
       AND p.user_id = ?
       AND p.quiz_bank_id = q.quiz_bank_id
-     WHERE q.id = ?`,
+     WHERE q.id = ?
+       AND (? IS NULL OR q.quiz_bank_id = ?)
+     ORDER BY q.quiz_bank_id
+     LIMIT 1`,
     userId,
-    questionId
+    questionId,
+    quizBankId ?? null,
+    quizBankId ?? null
   );
 
   if (!row) {
@@ -340,20 +421,28 @@ export async function getQuestionDetail(db: AppDb, userId: number, questionId: s
   };
 }
 
-export async function resetQuestionProgress(db: AppDb, userId: number, questionId: string) {
+export async function resetQuestionProgress(db: AppDb, userId: number, questionId: string, quizBankId?: number) {
   const result = await db.run(
-    "DELETE FROM user_progress WHERE user_id = ? AND question_id = ?",
+    `DELETE FROM user_progress
+     WHERE user_id = ? AND question_id = ? AND (? IS NULL OR quiz_bank_id = ?)`,
     userId,
-    questionId
+    questionId,
+    quizBankId ?? null,
+    quizBankId ?? null
   );
   return { questionId, reset: result.changes > 0 };
 }
 
 export async function markQuestion(
   db: AppDb,
-  params: { userId: number; questionId: string; isMarked: boolean }
+  params: { userId: number; questionId: string; quizBankId?: number; isMarked: boolean }
 ) {
-  const question = await db.get<QuestionRow>("SELECT * FROM questions WHERE id = ?", params.questionId);
+  const question = await db.get<QuestionRow>(
+    params.quizBankId
+      ? "SELECT * FROM questions WHERE quiz_bank_id = ? AND id = ?"
+      : "SELECT * FROM questions WHERE id = ? ORDER BY quiz_bank_id LIMIT 1",
+    ...(params.quizBankId ? [params.quizBankId, params.questionId] : [params.questionId])
+  );
   if (!question) {
     throw new Error("题目不存在");
   }
@@ -378,6 +467,15 @@ function nextStatus(mode: PracticeMode, isCorrect: boolean, consecutiveCorrect: 
     return isCorrect && consecutiveCorrect >= 3 ? "done" : "reviewing";
   }
   return isCorrect ? "done" : "reviewing";
+}
+
+async function resolveQuizBankId(db: AppDb, quizBankId?: number) {
+  if (quizBankId) {
+    const bank = await db.get<{ id: number }>("SELECT id FROM quiz_banks WHERE id = ?", quizBankId);
+    if (!bank) throw new Error("题库不存在");
+    return bank.id;
+  }
+  return (await getDefaultQuizBank(db)).id;
 }
 
 function parseWrongHistory(raw?: string | null) {

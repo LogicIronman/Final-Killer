@@ -1,4 +1,4 @@
-import { BookOpen, LogOut, NotebookTabs, UserRound } from "lucide-react";
+import { BookOpen, LogOut, NotebookTabs, Settings, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
@@ -28,13 +28,19 @@ export function Layout({ children }: { children: ReactNode }) {
             <NavItem to="/">主页</NavItem>
             <NavItem to="/practice/new">新题模式</NavItem>
             <NavItem to="/practice/review">复习模式</NavItem>
-            <NavItem to="/wrong-answers">错题本</NavItem>
-            <NavItem to="/marked">重点题</NavItem>
+            <NavItem to="/practice/exam">考试模式</NavItem>
             <NavItem to="/leaderboard">排行榜</NavItem>
-            {auth.isAdmin ? <NavItem to="/admin/exams">考试管理</NavItem> : null}
-            {auth.isAdmin ? <NavItem to="/admin/question-bank">题库管理</NavItem> : null}
+            {auth.isAdmin ? <NavItem to="/admin/question-bank">导入题库</NavItem> : null}
           </nav>
           <div className="flex items-center gap-3">
+            <Link
+              to="/settings"
+              className="grid h-11 w-11 place-items-center rounded text-ink transition hover:bg-cloud focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-hp-blue"
+              aria-label="设置"
+              title="设置"
+            >
+              <Settings className="h-5 w-5" aria-hidden />
+            </Link>
             <span className="hidden items-center gap-2 text-sm text-charcoal sm:flex">
               {auth.mode === "authenticated" ? (
                 <>

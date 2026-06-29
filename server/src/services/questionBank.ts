@@ -9,7 +9,7 @@ const questionSchema = z.object({
   options: z.record(z.string().min(1)),
   correctAnswer: z.string().min(1),
   chapter: z.string().optional(),
-  type: z.enum(["single", "multiple", "judge"]),
+  type: z.enum(["single", "multiple", "judge", "essay"]),
   explanation: z.string().optional()
 });
 
@@ -123,6 +123,22 @@ export async function getDefaultQuizBank(db: AppDb) {
   return bank;
 }
 
+export async function getQuizBanks(db: AppDb) {
+  const rows = await db.all<
+    Array<{ id: number; name: string; description: string | null; question_count: number }>
+  >(
+    `SELECT id, name, description, question_count
+     FROM quiz_banks
+     ORDER BY updated_at DESC, id ASC`
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    questionCount: row.question_count
+  }));
+}
+
 export async function getQuestionById(db: AppDb, questionId: string) {
   const row = await db.get<QuestionRow>("SELECT * FROM questions WHERE id = ?", questionId);
   return row ? toPublicQuestion(row) : null;
@@ -139,6 +155,13 @@ function validateQuestions(questions: QuestionInput[]) {
     ids.add(question.id);
 
     const optionKeys = Object.keys(question.options);
+    if (question.type === "essay") {
+      if (optionKeys.length > 0) {
+        throw new Error(`题库第 ${line} 题简答题 options 必须为空对象`);
+      }
+      return;
+    }
+
     if (optionKeys.length < 2) {
       throw new Error(`题库第 ${line} 题至少需要 2 个选项`);
     }

@@ -7,10 +7,12 @@ import { Badge, Button } from "./ui";
 
 export function ExamCountdown({
   exams,
-  canManage = false
+  canManage = false,
+  preferredExamId = null
 }: {
   exams: ExamSchedule[];
   canManage?: boolean;
+  preferredExamId?: number | null;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -28,7 +30,10 @@ export function ExamCountdown({
         .sort((a, b) => new Date(a.examAt).getTime() - new Date(b.examAt).getTime()),
     [exams, now]
   );
-  const selected = upcoming.find((exam) => exam.id === selectedId) ?? upcoming[0];
+  const selected =
+    upcoming.find((exam) => exam.id === selectedId) ??
+    upcoming.find((exam) => exam.id === preferredExamId) ??
+    upcoming[0];
 
   if (!selected) {
     return (
@@ -160,4 +165,3 @@ function formatExamDate(value: string) {
     hour12: false
   }).format(new Date(value));
 }
-

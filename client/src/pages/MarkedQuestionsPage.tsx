@@ -5,10 +5,12 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { Badge, Button, Card, EmptyState } from "../components/ui";
 import { getGuestMarkedQuestions, markGuestQuestion } from "../guestProgress";
+import { useLearningSettings } from "../settings";
 import type { Question } from "../types";
 
 export function MarkedQuestionsPage() {
   const auth = useAuth();
+  const settings = useLearningSettings();
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -24,11 +26,11 @@ export function MarkedQuestionsPage() {
     }
 
     api
-      .markedQuestions()
+      .markedQuestions(settings.selectedQuizBankId ?? undefined)
       .then((response) => setQuestions(response.questions))
       .catch((err) => setError(err instanceof Error ? err.message : "重点题加载失败"))
       .finally(() => setLoading(false));
-  }, [auth.isGuest]);
+  }, [auth.isGuest, settings.selectedQuizBankId]);
 
   async function removeMarked(questionId: string) {
     setUpdatingId(questionId);
@@ -37,7 +39,8 @@ export function MarkedQuestionsPage() {
       if (auth.isGuest) {
         markGuestQuestion(questionId, false);
       } else {
-        await api.mark(questionId, false);
+        const question = questions.find((item) => item.id === questionId);
+        await api.mark(questionId, false, question?.quizBankId ?? settings.selectedQuizBankId ?? undefined);
       }
       setQuestions((current) => current.filter((question) => question.id !== questionId));
     } catch (err) {
@@ -77,7 +80,7 @@ export function MarkedQuestionsPage() {
 
       <div className="grid gap-4">
         {questions.map((question) => (
-          <Card key={question.id}>
+          <Card key={`${question.quizBankId ?? 0}-${question.id}`}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone="blue">{question.chapter ?? "未分章"}</Badge>
@@ -107,7 +110,7 @@ export function MarkedQuestionsPage() {
               {question.explanation ?? "暂无解析。"}
             </p>
             <div className="mt-5">
-              <Link to={`/question/${question.id}`}>
+              <Link to={`/question/${question.id}?bank=${question.quizBankId ?? ""}`}>
                 <Button variant="outline">查看题目详情</Button>
               </Link>
             </div>
@@ -119,6 +122,7 @@ export function MarkedQuestionsPage() {
 }
 
 function labelForType(type: Question["type"]) {
+  if (type === "essay") return "简答题";
   if (type === "multiple") return "多选题";
   if (type === "judge") return "判断题";
   return "单选题";

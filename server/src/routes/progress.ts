@@ -15,39 +15,46 @@ import {
 
 const router = Router();
 
-const answerSchema = z.object({
+const essayAnswerSchema = z.object({
   questionId: z.string().min(1),
-  answer: z.string().min(1),
+  quizBankId: z.number().int().positive().optional(),
+  answer: z.string(),
   mode: z.enum(["new", "review"]).default("new")
 });
 
 const markSchema = z.object({
   questionId: z.string().min(1),
+  quizBankId: z.number().int().positive().optional(),
   isMarked: z.boolean()
 });
 
 const resetSchema = z.object({
-  questionId: z.string().min(1)
+  questionId: z.string().min(1),
+  quizBankId: z.number().int().positive().optional()
 });
 
 router.get("/stats", requireAuth, async (req, res) => {
-  return sendOk(res, await getStats(await getDb(), req.user!.id));
+  const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
+  return sendOk(res, await getStats(await getDb(), req.user!.id, quizBankId));
 });
 
 router.get("/wrong-answers", requireAuth, async (req, res) => {
-  return sendOk(res, { questions: await getWrongAnswers(await getDb(), req.user!.id) });
+  const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
+  return sendOk(res, { questions: await getWrongAnswers(await getDb(), req.user!.id, quizBankId) });
 });
 
 router.get("/marked", requireAuth, async (req, res) => {
-  return sendOk(res, { questions: await getMarkedQuestions(await getDb(), req.user!.id) });
+  const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
+  return sendOk(res, { questions: await getMarkedQuestions(await getDb(), req.user!.id, quizBankId) });
 });
 
 router.get("/completed", requireAuth, async (req, res) => {
-  return sendOk(res, { questions: await getCompletedQuestions(await getDb(), req.user!.id) });
+  const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
+  return sendOk(res, { questions: await getCompletedQuestions(await getDb(), req.user!.id, quizBankId) });
 });
 
 router.post("/answer", requireAuth, async (req, res) => {
-  const parsed = answerSchema.safeParse(req.body);
+  const parsed = essayAnswerSchema.safeParse(req.body);
   if (!parsed.success) {
     return sendError(res, "VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "输入不合法");
   }
@@ -56,6 +63,7 @@ router.post("/answer", requireAuth, async (req, res) => {
     const result = await answerQuestion(await getDb(), {
       userId: req.user!.id,
       questionId: parsed.data.questionId,
+      quizBankId: parsed.data.quizBankId,
       answer: parsed.data.answer,
       mode: parsed.data.mode
     });
@@ -77,6 +85,7 @@ router.post("/mark", requireAuth, async (req, res) => {
       await markQuestion(await getDb(), {
         userId: req.user!.id,
         questionId: parsed.data.questionId,
+        quizBankId: parsed.data.quizBankId,
         isMarked: parsed.data.isMarked
       })
     );
@@ -93,7 +102,12 @@ router.post("/reset", requireAuth, async (req, res) => {
 
   return sendOk(
     res,
-    await resetQuestionProgress(await getDb(), req.user!.id, parsed.data.questionId)
+    await resetQuestionProgress(
+      await getDb(),
+      req.user!.id,
+      parsed.data.questionId,
+      parsed.data.quizBankId
+    )
   );
 });
 

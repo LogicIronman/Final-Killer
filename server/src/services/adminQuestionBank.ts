@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AppDb } from "../db.js";
 import type { QuestionInput, QuestionRow } from "../types.js";
-import { getDefaultQuizBank, parseQuestionBank } from "./questionBank.js";
+import { getDefaultQuizBank, getQuizBanks, parseQuestionBank } from "./questionBank.js";
 
 const PREVIEW_TTL_MS = 30 * 60 * 1000;
 let mutationQueue: Promise<void> = Promise.resolve();
@@ -34,7 +34,8 @@ type StoredDailyLog = {
 
 type PreviewRow = {
   id: string;
-  quiz_bank_id: number;
+  quiz_bank_id: number | null;
+  import_mode: "create" | "update";
   bank_name: string;
   source_file_name: string;
   questions_json: string;
@@ -45,7 +46,7 @@ type PreviewRow = {
   added_ids_json: string;
   updated_ids_json: string;
   removed_ids_json: string;
-  base_updated_at: string;
+  base_updated_at: string | null;
   expires_at: string;
 };
 
@@ -78,24 +79,22 @@ export async function createQuestionBankPreview(
   db: AppDb,
   params: {
     questions: unknown;
+    mode?: "create" | "update";
+    quizBankId?: number;
     bankName?: string;
     sourceFileName: string;
     createdBy: number;
   }
 ) {
   const questions = parseQuestionBank(params.questions);
-  const bank = await getDefaultQuizBank(db);
-  const bankState = await db.get<{ updated_at: string }>(
-    "SELECT updated_at FROM quiz_banks WHERE id = ?",
-    bank.id
-  );
-  if (!bankState) {
-    throw new QuestionBankManagementError("BANK_NOT_FOUND", "当前题库不存在", 404);
-  }
-  const current = await db.all<QuestionRow[]>(
-    "SELECT * FROM questions WHERE quiz_bank_id = ? ORDER BY id",
-    bank.id
-  );
+  const mode = params.mode ?? "update";
+  const bank = mode === "update" ? await getTargetBank(db, params.quizBankId) : null;
+  const current = bank
+    ? await db.all<QuestionRow[]>(
+        "SELECT * FROM questions WHERE quiz_bank_id = ? ORDER BY id",
+        bank.id
+      )
+    : [];
   const currentById = new Map(current.map((question) => [question.id, question]));
   const incomingIds = new Set(questions.map((question) => question.id));
   const addedIds: string[] = [];
@@ -119,18 +118,19 @@ export async function createQuestionBankPreview(
   const previewId = randomUUID();
   const createdAt = new Date();
   const expiresAt = new Date(createdAt.getTime() + PREVIEW_TTL_MS);
-  const bankName = params.bankName?.trim() || bank.name;
+  const bankName = params.bankName?.trim() || bank?.name || "新题库";
 
   await db.run("DELETE FROM question_bank_previews WHERE expires_at <= ?", createdAt.toISOString());
   await db.run(
     `INSERT INTO question_bank_previews
-     (id, quiz_bank_id, bank_name, source_file_name, questions_json,
+     (id, quiz_bank_id, import_mode, bank_name, source_file_name, questions_json,
       added_count, updated_count, removed_count, unchanged_count,
       added_ids_json, updated_ids_json, removed_ids_json, base_updated_at,
       created_by, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     previewId,
-    bank.id,
+    bank?.id ?? null,
+    mode,
     bankName,
     params.sourceFileName,
     JSON.stringify(questions),
@@ -141,7 +141,7 @@ export async function createQuestionBankPreview(
     JSON.stringify(addedIds),
     JSON.stringify(updatedIds),
     JSON.stringify(removedIds),
-    bankState.updated_at,
+    bank?.updated_at ?? null,
     params.createdBy,
     createdAt.toISOString(),
     expiresAt.toISOString()
@@ -151,6 +151,8 @@ export async function createQuestionBankPreview(
     previewId,
     bankName,
     sourceFileName: params.sourceFileName,
+    mode,
+    quizBankId: bank?.id ?? null,
     currentCount: current.length,
     nextCount: questions.length,
     addedCount: addedIds.length,
@@ -179,47 +181,70 @@ async function applyQuestionBankPreviewInternal(
 ) {
   const preview = await getUsablePreview(db, previewId, adminId);
   const questions = parseQuestionBank(JSON.parse(preview.questions_json));
-  const updatedIds = JSON.parse(preview.updated_ids_json) as string[];
   const removedIds = JSON.parse(preview.removed_ids_json) as string[];
-  const changedIds = [...updatedIds, ...removedIds];
 
   await db.exec("BEGIN IMMEDIATE TRANSACTION");
   try {
-    const bankState = await db.get<{ updated_at: string }>(
-      "SELECT updated_at FROM quiz_banks WHERE id = ?",
-      preview.quiz_bank_id
-    );
-    if (!bankState || bankState.updated_at !== preview.base_updated_at) {
-      throw new QuestionBankManagementError(
-        "PREVIEW_STALE",
-        "题库已在预览后发生变化，请重新上传并确认差异",
-        409
-      );
-    }
-    const versionId = await createSnapshot(db, {
-      bankId: preview.quiz_bank_id,
-      createdBy: adminId,
-      sourceFileName: preview.source_file_name,
-      reason: "import"
-    });
+    let bankId = preview.quiz_bank_id;
+    let versionId: number | null = null;
+    const now = new Date().toISOString();
 
-    if (changedIds.length) {
-      await deleteProgressForQuestions(db, preview.quiz_bank_id, changedIds);
+    if (preview.import_mode === "create") {
+      const result = await db.run(
+        `INSERT INTO quiz_banks (name, description, question_count, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        preview.bank_name,
+        null,
+        questions.length,
+        now,
+        now
+      );
+      bankId = result.lastID!;
+    } else {
+      if (!bankId) {
+        throw new QuestionBankManagementError("BANK_NOT_FOUND", "当前题库不存在", 404);
+      }
+      const bankState = await db.get<{ updated_at: string }>(
+        "SELECT updated_at FROM quiz_banks WHERE id = ?",
+        bankId
+      );
+      if (!bankState || bankState.updated_at !== preview.base_updated_at) {
+        throw new QuestionBankManagementError(
+          "PREVIEW_STALE",
+          "题库已在预览后发生变化，请重新上传并确认差异",
+          409
+        );
+      }
+      versionId = await createSnapshot(db, {
+        bankId,
+        createdBy: adminId,
+        sourceFileName: preview.source_file_name,
+        reason: "import"
+      });
     }
-    await upsertQuestions(db, preview.quiz_bank_id, questions);
-    await deleteQuestions(db, preview.quiz_bank_id, removedIds);
+
+    await upsertQuestions(db, bankId!, questions);
+    await deleteQuestions(db, bankId!, removedIds);
     await db.run(
       `UPDATE quiz_banks
        SET name = ?, question_count = ?, updated_at = ?
        WHERE id = ?`,
       preview.bank_name,
       questions.length,
-      new Date().toISOString(),
-      preview.quiz_bank_id
+      now,
+      bankId!
     );
+    if (preview.import_mode === "create") {
+      versionId = await createSnapshot(db, {
+        bankId: bankId!,
+        createdBy: adminId,
+        sourceFileName: preview.source_file_name,
+        reason: "create"
+      });
+    }
     await db.run("DELETE FROM question_bank_previews WHERE id = ?", previewId);
     await db.exec("COMMIT");
-    return { versionId, questionCount: questions.length, bankName: preview.bank_name };
+    return { versionId: versionId!, quizBankId: bankId!, questionCount: questions.length, bankName: preview.bank_name };
   } catch (error) {
     await db.exec("ROLLBACK");
     throw error;
@@ -242,6 +267,7 @@ export async function getQuestionBankStatus(db: AppDb) {
   );
   return {
     bank: { id: bank.id, name: bank.name, questionCount: bank.question_count },
+    banks: await getQuizBanks(db),
     latestVersion: latest ? toVersionSummary(latest) : null
   };
 }
@@ -409,7 +435,7 @@ async function upsertQuestions(db: AppDb, bankId: number, questions: QuestionInp
     `INSERT INTO questions
      (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
+       ON CONFLICT(quiz_bank_id, id) DO UPDATE SET
        quiz_bank_id = excluded.quiz_bank_id,
        question = excluded.question,
        options_json = excluded.options_json,
@@ -439,17 +465,6 @@ async function upsertQuestions(db: AppDb, bankId: number, questions: QuestionInp
 async function deleteQuestions(db: AppDb, bankId: number, questionIds: string[]) {
   const statement = await db.prepare(
     "DELETE FROM questions WHERE quiz_bank_id = ? AND id = ?"
-  );
-  try {
-    for (const questionId of questionIds) await statement.run(bankId, questionId);
-  } finally {
-    await statement.finalize();
-  }
-}
-
-async function deleteProgressForQuestions(db: AppDb, bankId: number, questionIds: string[]) {
-  const statement = await db.prepare(
-    "DELETE FROM user_progress WHERE quiz_bank_id = ? AND question_id = ?"
   );
   try {
     for (const questionId of questionIds) await statement.run(bankId, questionId);
@@ -535,8 +550,23 @@ function toVersionSummary(row: VersionRow) {
     questionCount: row.question_count,
     createdBy: row.created_by,
     createdAt: row.created_at,
-    reason: row.reason as "import" | "rollback"
+    reason: row.reason as "import" | "rollback" | "create"
   };
+}
+
+async function getTargetBank(db: AppDb, quizBankId?: number) {
+  const fallback = quizBankId ? null : await getDefaultQuizBank(db);
+  const bankId = quizBankId ?? fallback?.id;
+  const bank = await db.get<{
+    id: number;
+    name: string;
+    question_count: number;
+    updated_at: string;
+  }>("SELECT id, name, question_count, updated_at FROM quiz_banks WHERE id = ?", bankId ?? 0);
+  if (!bank) {
+    throw new QuestionBankManagementError("BANK_NOT_FOUND", "目标题库不存在", 404);
+  }
+  return bank;
 }
 
 const progressSchema = z.object({

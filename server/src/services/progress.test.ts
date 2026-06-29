@@ -6,6 +6,7 @@ import { migrate, openDb } from "../db.js";
 import {
   answerQuestion,
   getCompletedQuestions,
+  getEssayQuestions,
   getMarkedQuestions,
   getNewQuestions,
   getQuestionDetail,
@@ -38,6 +39,67 @@ async function setupDb() {
   );
   return db;
 }
+
+test("new questions can be scoped to a selected quiz bank", async () => {
+  const db = await setupDb();
+  const now = new Date().toISOString();
+  await db.run(
+    `INSERT INTO quiz_banks (id, name, question_count, created_at, updated_at)
+     VALUES (2, 'Second bank', 1, ?, ?)`,
+    now,
+    now
+  );
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('other-q1', 2, 'Other?', '{"A":"One","B":"Two"}', 'A', '第二章', 'single', NULL)`
+  );
+
+  const questions = await getNewQuestions(db, 1, 10, { quizBankId: 2, includeEssay: false });
+
+  assert.deepEqual(questions.map((question) => question.id), ["other-q1"]);
+  assert.equal(questions[0].quizBankId, 2);
+  await db.close();
+});
+
+test("essay questions are hidden unless explicitly enabled and reveal answers without grading", async () => {
+  const db = await setupDb();
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('essay-1', 1, '简述科学社会主义。', '{}', '参考答案', '第七章', 'essay', '解析')`
+  );
+
+  const withoutEssay = await getNewQuestions(db, 1, 10, { quizBankId: 1, includeEssay: false });
+  assert.equal(withoutEssay.some((question) => question.id === "essay-1"), false);
+
+  const withEssay = await getNewQuestions(db, 1, 10, { quizBankId: 1, includeEssay: true });
+  assert.equal(withEssay.some((question) => question.id === "essay-1"), true);
+
+  const result = await answerQuestion(db, {
+    userId: 1,
+    questionId: "essay-1",
+    answer: "",
+    mode: "new"
+  });
+
+  assert.equal(result.isCorrect, true);
+  assert.equal(result.correctAnswer, "参考答案");
+  assert.equal(result.progress.status, "done");
+  await db.close();
+});
+
+test("essay drill only returns essay questions", async () => {
+  const db = await setupDb();
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('essay-1', 1, '简述科学社会主义。', '{}', '参考答案', '第七章', 'essay', '解析')`
+  );
+
+  const questions = await getEssayQuestions(db, 1, 10, { quizBankId: 1 });
+
+  assert.deepEqual(questions.map((question) => question.id), ["essay-1"]);
+  assert.equal(questions[0].type, "essay");
+  await db.close();
+});
 
 test("new correct answer marks the question done", async () => {
   const db = await setupDb();

@@ -3,11 +3,13 @@ import { lazy, Suspense } from "react";
 import type { ReactNode } from "react";
 import { AuthProvider, useAuth } from "./auth";
 import { Layout } from "./components/Layout";
+import { LearningSettingsProvider } from "./settings";
 import { CompletedQuestionsPage } from "./pages/CompletedQuestionsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MarkedQuestionsPage } from "./pages/MarkedQuestionsPage";
 import { PracticePage } from "./pages/PracticePage";
+import { ExamPracticePage } from "./pages/ExamPracticePage";
 import { QuestionDetailPage } from "./pages/QuestionDetailPage";
 import { WrongAnswersPage } from "./pages/WrongAnswersPage";
 
@@ -20,35 +22,48 @@ const AdminQuestionBankPage = lazy(() =>
 const LeaderboardPage = lazy(() =>
   import("./pages/LeaderboardPage").then((module) => ({ default: module.LeaderboardPage }))
 );
+const SettingsPage = lazy(() =>
+  import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage }))
+);
+const ExamRecordsPage = lazy(() =>
+  import("./pages/ExamRecordsPage").then((module) => ({ default: module.ExamRecordsPage }))
+);
 
 export function App() {
   return (
     <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route
-          path="/*"
-          element={
-            <RequireSession>
-              <Layout>
-                <Routes>
-                  <Route path="/" element={<DashboardPage />} />
-                  <Route path="/practice/new" element={<PracticePage />} />
-                  <Route path="/practice/review" element={<PracticePage mode="review" />} />
-                  <Route path="/completed" element={<CompletedQuestionsPage />} />
-                  <Route path="/question/:id" element={<QuestionDetailPage />} />
-                  <Route path="/wrong-answers" element={<WrongAnswersPage />} />
-                  <Route path="/marked" element={<MarkedQuestionsPage />} />
-                  <Route path="/leaderboard" element={<LazyPage><LeaderboardPage /></LazyPage>} />
-                  <Route path="/admin/exams" element={<LazyPage><AdminExamsPage /></LazyPage>} />
-                  <Route path="/admin/question-bank" element={<LazyPage><AdminQuestionBankPage /></LazyPage>} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </Layout>
-            </RequireSession>
-          }
-        />
-      </Routes>
+      <LearningSettingsProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/*"
+            element={
+              <RequireSession>
+                <Layout>
+                  <Routes>
+                    <Route path="/" element={<DashboardPage />} />
+                    <Route path="/practice/new" element={<PracticePage />} />
+                    <Route path="/practice/review" element={<PracticePage mode="review" />} />
+                    <Route path="/practice/exam" element={<ExamPracticePage />} />
+                    <Route path="/practice/essay" element={<PracticePage mode="essay" />} />
+                    <Route path="/exam-records" element={<LazyPage><ExamRecordsPage /></LazyPage>} />
+                    <Route path="/exam-records/:id" element={<LazyPage><ExamRecordsPage /></LazyPage>} />
+                    <Route path="/completed" element={<CompletedQuestionsPage />} />
+                    <Route path="/question/:id" element={<QuestionDetailPage />} />
+                    <Route path="/wrong-answers" element={<WrongAnswersPage />} />
+                    <Route path="/marked" element={<MarkedQuestionsPage />} />
+                    <Route path="/settings" element={<LazyPage><SettingsPage /></LazyPage>} />
+                    <Route path="/leaderboard" element={<LazyPage><LeaderboardPage /></LazyPage>} />
+                    <Route path="/admin/exams" element={<LazyPage><AdminExamsPage /></LazyPage>} />
+                    <Route path="/admin/question-bank" element={<LazyPage><AdminQuestionBankPage /></LazyPage>} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </Layout>
+              </RequireSession>
+            }
+          />
+        </Routes>
+      </LearningSettingsProvider>
     </AuthProvider>
   );
 }

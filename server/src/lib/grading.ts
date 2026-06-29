@@ -29,6 +29,14 @@ export function gradeAnswer(params: {
 }): { isCorrect: boolean; normalizedAnswer: string; normalizedCorrect: string } {
   const { type, answer, correctAnswer, options } = params;
 
+  if (type === "essay") {
+    return {
+      normalizedAnswer: answer.trim(),
+      normalizedCorrect: correctAnswer,
+      isCorrect: true
+    };
+  }
+
   if (type === "multiple") {
     const normalizedAnswer = normalizeChoice(answer);
     const normalizedCorrect = normalizeChoice(correctAnswer);

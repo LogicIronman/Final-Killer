@@ -1,11 +1,14 @@
 import type {
   ApiEnvelope,
+  ExamAttempt,
+  ExamAttemptRecord,
   ExamSchedule,
   LeaderboardEntry,
   PracticeMode,
   Question,
   QuestionBankAdminState,
   QuestionBankPreview,
+  QuizBank,
   QuestionDetail,
   Stats,
   User,
@@ -63,16 +66,64 @@ export const api = {
   async stats() {
     return request<Stats>("/api/progress/stats");
   },
-  async newQuestions(limit = 10) {
-    return request<{ questions: Question[] }>(`/api/questions/new?limit=${limit}`);
+  async quizBanks() {
+    return request<{ banks: QuizBank[] }>("/api/quiz-banks");
   },
-  async reviewQuestions(limit = 10) {
-    return request<{ questions: Question[] }>(`/api/questions/review?limit=${limit}`);
+  async bankStats(quizBankId: number) {
+    return request<Stats>(`/api/progress/stats?quizBankId=${quizBankId}`);
   },
-  async questionDetail(questionId: string) {
-    return request<QuestionDetail>(`/api/questions/${questionId}`);
+  async newQuestions(limit = 10, quizBankId?: number, includeEssay = false) {
+    const params = new URLSearchParams({ limit: String(limit), includeEssay: String(includeEssay) });
+    if (quizBankId) params.set("quizBankId", String(quizBankId));
+    return request<{ questions: Question[] }>(`/api/questions/new?${params.toString()}`);
   },
-  async answer(questionId: string, answer: string, mode: PracticeMode = "new") {
+  async reviewQuestions(limit = 10, quizBankId?: number, includeEssay = false) {
+    const params = new URLSearchParams({ limit: String(limit), includeEssay: String(includeEssay) });
+    if (quizBankId) params.set("quizBankId", String(quizBankId));
+    return request<{ questions: Question[] }>(`/api/questions/review?${params.toString()}`);
+  },
+  async examQuestions(quizBankId?: number, includeEssay = false) {
+    const params = new URLSearchParams({ includeEssay: String(includeEssay) });
+    if (quizBankId) params.set("quizBankId", String(quizBankId));
+    return request<{ questions: Question[] }>(`/api/questions/exam?${params.toString()}`);
+  },
+  async essayQuestions(limit = 10, quizBankId?: number) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (quizBankId) params.set("quizBankId", String(quizBankId));
+    return request<{ questions: Question[] }>(`/api/questions/essay-drill?${params.toString()}`);
+  },
+  async startExamAttempt(quizBankId?: number, includeEssay = false) {
+    return request<ExamAttempt>("/api/exam-attempts/start", {
+      method: "POST",
+      body: JSON.stringify({ quizBankId, includeEssay })
+    });
+  },
+  async currentExamAttempt(quizBankId?: number) {
+    const query = quizBankId ? `?quizBankId=${quizBankId}` : "";
+    return request<{ attempt: ExamAttempt | null }>(`/api/exam-attempts/current${query}`);
+  },
+  async saveExamAnswer(attemptId: number, questionId: string, answer: string) {
+    return request<ExamAttempt>(`/api/exam-attempts/${attemptId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ questionId, answer })
+    });
+  },
+  async submitExamAttempt(attemptId: number) {
+    return request<ExamAttempt>(`/api/exam-attempts/${attemptId}/submit`, {
+      method: "POST"
+    });
+  },
+  async examAttemptRecords() {
+    return request<{ records: ExamAttemptRecord[] }>("/api/exam-attempts");
+  },
+  async examAttempt(id: number) {
+    return request<{ attempt: ExamAttempt }>(`/api/exam-attempts/${id}`);
+  },
+  async questionDetail(questionId: string, quizBankId?: number) {
+    const query = quizBankId ? `?quizBankId=${quizBankId}` : "";
+    return request<QuestionDetail>(`/api/questions/${questionId}${query}`);
+  },
+  async answer(questionId: string, answer: string, mode: PracticeMode = "new", quizBankId?: number) {
     return request<{
       isCorrect: boolean;
       correctAnswer: string;
@@ -80,22 +131,25 @@ export const api = {
       progress: { status: string; consecutiveCorrect: number };
     }>("/api/progress/answer", {
       method: "POST",
-      body: JSON.stringify({ questionId, answer, mode })
+      body: JSON.stringify({ questionId, quizBankId, answer, mode })
     });
   },
-  async wrongAnswers() {
-    return request<{ questions: WrongAnswer[] }>("/api/progress/wrong-answers");
+  async wrongAnswers(quizBankId?: number) {
+    const query = quizBankId ? `?quizBankId=${quizBankId}` : "";
+    return request<{ questions: WrongAnswer[] }>(`/api/progress/wrong-answers${query}`);
   },
-  async markedQuestions() {
-    return request<{ questions: Question[] }>("/api/progress/marked");
+  async markedQuestions(quizBankId?: number) {
+    const query = quizBankId ? `?quizBankId=${quizBankId}` : "";
+    return request<{ questions: Question[] }>(`/api/progress/marked${query}`);
   },
-  async completedQuestions() {
-    return request<{ questions: Question[] }>("/api/progress/completed");
+  async completedQuestions(quizBankId?: number) {
+    const query = quizBankId ? `?quizBankId=${quizBankId}` : "";
+    return request<{ questions: Question[] }>(`/api/progress/completed${query}`);
   },
-  async mark(questionId: string, isMarked: boolean) {
+  async mark(questionId: string, isMarked: boolean, quizBankId?: number) {
     return request<{ questionId: string; isMarked: boolean }>("/api/progress/mark", {
       method: "POST",
-      body: JSON.stringify({ questionId, isMarked })
+      body: JSON.stringify({ questionId, quizBankId, isMarked })
     });
   },
   async leaderboard() {
@@ -121,16 +175,18 @@ export const api = {
       method: "DELETE"
     });
   },
-  async resetQuestion(questionId: string) {
+  async resetQuestion(questionId: string, quizBankId?: number) {
     return request<{ questionId: string; reset: boolean }>("/api/progress/reset", {
       method: "POST",
-      body: JSON.stringify({ questionId })
+      body: JSON.stringify({ questionId, quizBankId })
     });
   },
   async questionBankAdmin() {
     return request<QuestionBankAdminState>("/api/admin/question-bank");
   },
   async previewQuestionBank(params: {
+    mode: "create" | "update";
+    quizBankId?: number;
     bankName: string;
     sourceFileName: string;
     questions: unknown;
@@ -141,7 +197,7 @@ export const api = {
     });
   },
   async importQuestionBank(previewId: string) {
-    return request<{ versionId: number; questionCount: number; bankName: string }>(
+    return request<{ versionId: number; quizBankId: number; questionCount: number; bankName: string }>(
       "/api/admin/question-bank/import",
       { method: "POST", body: JSON.stringify({ previewId }) }
     );
