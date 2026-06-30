@@ -5,7 +5,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { AnimatedList } from "../components/AnimatedList";
 import { Badge, Button, Card, EmptyState } from "../components/ui";
-import { isActionKey, labelForKeyCode, shouldIgnoreActionKeyInInput } from "../keyboard";
+import { isActionKey, shouldIgnoreActionKeyInInput } from "../keyboard";
 import { useLearningSettings } from "../settings";
 import {
   answerGuestQuestion,
@@ -246,7 +246,6 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
   const optionEntries = useMemo(() => (current ? Object.entries(current.options) : []), [current]);
   const isEssay = current?.type === "essay";
   const reviewStreak = result?.progress.consecutiveCorrect ?? current?.reviewProgress?.consecutiveCorrect ?? 0;
-  const nextKeyLabel = labelForKeyCode(settings.nextQuestionKey);
   const nextChapter = nextAvailableChapter(chapters, settings.selectedChapter, isReview);
   const activeChapterIndex =
     settings.practiceOrderMode === "chapter" && settings.selectedChapter
@@ -454,7 +453,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
             />
           </div>
           <p className="mt-4 text-sm leading-6 text-charcoal">
-            {isEssayDrill ? "抽背模式只出现简答题，提交后直接查看参考答案。" : isExam ? "考试模式按单选、判断、多选、简答分段组卷。" : `A-E 或 1-5 选择，按 ${nextKeyLabel} 提交；答题后再按 ${nextKeyLabel} 进入下一题。左箭头可回看。`}
+            {isEssayDrill ? "抽背模式只出现简答题，提交后直接查看参考答案。" : isExam ? "考试模式按单选、判断、多选、简答分段组卷。" : "A-E 或 1-5 选择，按 Enter 提交；答题后再按 Enter 进入下一题（可在设置中自定义）。左箭头可回看。"}
           </p>
         </Card>
         {!isExam && !isEssayDrill ? (

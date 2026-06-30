@@ -35,7 +35,7 @@ const defaultSettings: LearningSettings = {
   includeEssay: true,
   practiceOrderMode: "random",
   selectedChapter: null,
-  nextQuestionKey: "Space",
+  nextQuestionKey: "Enter",
   countdownEnabled: true,
   countdownExamId: null,
   countdownHiddenExamIds: [],
