@@ -41,7 +41,7 @@ export function CompletedQuestionsPage() {
     return (
       <EmptyState
         title="还没有已完成题目"
-        body="新题一次答对，或复习题连续答对 3 次后，会进入已完成列表。"
+        body="新题一次答对，或复习题连续答对 2 次后，会进入已完成列表。"
         action={
           <Link to="/practice/new">
             <Button>开始新题</Button>

@@ -1,6 +1,8 @@
 export type QuestionType = "single" | "multiple" | "judge" | "essay";
 export type PracticeMode = "new" | "review";
 export type PracticeViewMode = PracticeMode | "exam" | "essay";
+export type PracticeOrderMode = "random" | "chapter";
+export type NextQuestionKey = string;
 
 export interface User {
   id: number;
@@ -69,6 +71,16 @@ export interface Stats {
     name: string;
     question_count: number;
   };
+}
+
+export interface ChapterProgress {
+  chapter: string;
+  total: number;
+  done: number;
+  reviewing: number;
+  attempts: number;
+  correct: number;
+  accuracy: number;
 }
 
 export interface QuizBank {

@@ -1,19 +1,37 @@
 import { BookOpen, LogOut, NotebookTabs, Settings, UserRound } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
+import { api } from "../api";
 import { useAuth } from "../auth";
 import { Button } from "./ui";
+
+const DEFAULT_TOP_GAME_LINK = "https://generals.io/games/5rsr";
 
 export function Layout({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const navigate = useNavigate();
+  const [topGameLink, setTopGameLink] = useState(DEFAULT_TOP_GAME_LINK);
+
+  useEffect(() => {
+    api
+      .publicAppSettings()
+      .then((settings) => setTopGameLink(settings.topGameLink))
+      .catch(() => setTopGameLink(DEFAULT_TOP_GAME_LINK));
+  }, []);
 
   return (
     <div className="min-h-screen bg-white text-ink">
       <div className="bg-ink px-4 py-2 text-sm text-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <span>期末杀手 · 马克思主义基本原理</span>
-          <span>{auth.mode === "guest" ? "游客模式：进度仅保存在本机" : "Phase 4"}</span>
+          {auth.mode === "guest" ? (
+            <span>游客模式：进度仅保存在本机</span>
+          ) : (
+            <a href={topGameLink} target="_blank" rel="noreferrer" className="font-medium hover:underline">
+              来一把≡ω≡
+            </a>
+          )}
         </div>
       </div>
       <header className="border-b border-fog bg-white">
@@ -31,6 +49,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <NavItem to="/practice/exam">考试模式</NavItem>
             <NavItem to="/leaderboard">排行榜</NavItem>
             {auth.isAdmin ? <NavItem to="/admin/question-bank">导入题库</NavItem> : null}
+            {auth.isAdmin ? <NavItem to="/admin/exams">考试管理</NavItem> : null}
           </nav>
           <div className="flex items-center gap-3">
             <Link

@@ -16,9 +16,13 @@ router.get("/new", requireAuth, async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit ?? 10), 1), 50);
   const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
   const includeEssay = req.query.includeEssay === "1" || req.query.includeEssay === "true";
+  const orderMode = req.query.orderMode === "chapter" ? "chapter" : "random";
+  const chapter = typeof req.query.chapter === "string" && req.query.chapter.trim() ? req.query.chapter : undefined;
   const questions = await getNewQuestions(await getDb(), req.user!.id, limit, {
     quizBankId,
-    includeEssay
+    includeEssay,
+    orderMode,
+    chapter
   });
   return sendOk(res, { questions });
 });
@@ -27,9 +31,13 @@ router.get("/review", requireAuth, async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit ?? 10), 1), 50);
   const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
   const includeEssay = req.query.includeEssay === "1" || req.query.includeEssay === "true";
+  const orderMode = req.query.orderMode === "chapter" ? "chapter" : "random";
+  const chapter = typeof req.query.chapter === "string" && req.query.chapter.trim() ? req.query.chapter : undefined;
   const questions = await getReviewQuestions(await getDb(), req.user!.id, limit, {
     quizBankId,
-    includeEssay
+    includeEssay,
+    orderMode,
+    chapter
   });
   return sendOk(res, { questions });
 });

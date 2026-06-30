@@ -11,6 +11,7 @@ import type {
   WrongAnswer,
   WrongAttempt
 } from "./types";
+import type { ChapterProgress, PracticeOrderMode } from "./types";
 
 type GuestStatus = "unseen" | "reviewing" | "done";
 
@@ -30,41 +31,54 @@ const STORAGE_KEY = "final-killer-guest-progress";
 const GUEST_EXAM_KEY = "final-killer-guest-exam-attempts";
 const questionList = questions as Question[];
 
-export function getGuestQuestions(limit = 10) {
+export function getGuestQuestions(
+  limit = 10,
+  includeEssay = true,
+  orderMode: PracticeOrderMode = "random",
+  chapter?: string | null
+) {
   const progress = readProgress();
   const unseen = questionList.filter(
-    (question) => !progress[question.id] || progress[question.id].totalAttempts === 0
+    (question) =>
+      (includeEssay || question.type !== "essay") &&
+      (!chapter || (question.chapter ?? "未分章") === chapter) &&
+      (!progress[question.id] || progress[question.id].totalAttempts === 0)
   );
-  return shuffle(unseen)
+  const ordered = orderMode === "chapter"
+    ? [...unseen].sort((a, b) => compareQuestionsByChapter(a, b))
+    : shuffle(unseen);
+  return ordered
     .slice(0, limit)
     .map((question) => ({ ...question, isMarked: progress[question.id]?.isMarked ?? false }));
 }
 
-export function getGuestReviewQuestions(limit = 10) {
+export function getGuestReviewQuestions(
+  limit = 10,
+  includeEssay = true,
+  orderMode: PracticeOrderMode = "random",
+  chapter?: string | null
+) {
   const progress = readProgress();
-  const candidates = shuffle(
-    Object.entries(progress).filter(([, item]) => item.status === "reviewing" && item.wrongCount > 0)
-  )
-    .sort(([, a], [, b]) => {
-      const streakDifference = a.consecutiveCorrect - b.consecutiveCorrect;
-      if (streakDifference !== 0) return streakDifference;
-      return String(a.lastWrongAt ?? a.lastAnsweredAt).localeCompare(
-        String(b.lastWrongAt ?? b.lastAnsweredAt)
-      );
+  const candidates = Object.entries(progress)
+    .filter(([, item]) => item.status === "reviewing" && item.wrongCount > 0)
+    .map(([questionId, item]) => {
+      const question = questionList.find((candidate) => candidate.id === questionId)!;
+      return {
+        ...question,
+        isMarked: item.isMarked,
+        reviewProgress: {
+          consecutiveCorrect: item.consecutiveCorrect,
+          wrongCount: item.wrongCount
+        }
+      };
     })
-    .slice(0, limit);
+    .filter((question) => (includeEssay || question.type !== "essay") && (!chapter || (question.chapter ?? "未分章") === chapter));
 
-  return candidates.map(([questionId, item]) => {
-    const question = questionList.find((candidate) => candidate.id === questionId)!;
-    return {
-      ...question,
-      isMarked: item.isMarked,
-      reviewProgress: {
-        consecutiveCorrect: item.consecutiveCorrect,
-        wrongCount: item.wrongCount
-      }
-    };
-  });
+  const ordered = orderMode === "chapter"
+    ? [...candidates].sort((a, b) => compareQuestionsByChapter(a, b))
+    : shuffle(candidates);
+
+  return ordered.slice(0, limit);
 }
 
 export function getGuestExamQuestions(includeEssay = false) {
@@ -215,7 +229,7 @@ export function answerGuestQuestion(
   const consecutiveCorrect = isCorrect ? (previous?.consecutiveCorrect ?? 0) + 1 : 0;
   const status =
     mode === "review"
-      ? isCorrect && consecutiveCorrect >= 3
+      ? isCorrect && consecutiveCorrect >= 2
         ? "done"
         : "reviewing"
       : isCorrect
@@ -290,6 +304,32 @@ export function getGuestStats(): Stats {
     today,
     quizBank: { id: 0, name: "游客本地题库", question_count: questionList.length }
   };
+}
+
+export function getGuestChapterStats(): ChapterProgress[] {
+  const progress = readProgress();
+  const grouped = new Map<string, ChapterProgress>();
+  for (const question of questionList) {
+    const chapter = question.chapter ?? "未分章";
+    const item = progress[question.id];
+    const current = grouped.get(chapter) ?? {
+      chapter,
+      total: 0,
+      done: 0,
+      reviewing: 0,
+      attempts: 0,
+      correct: 0,
+      accuracy: 0
+    };
+    current.total += 1;
+    current.done += item?.status === "done" ? 1 : 0;
+    current.reviewing += item?.status === "reviewing" ? 1 : 0;
+    current.attempts += item?.totalAttempts ?? 0;
+    current.correct += item?.correctCount ?? 0;
+    current.accuracy = current.attempts > 0 ? Math.round((current.correct / current.attempts) * 1000) / 10 : 0;
+    grouped.set(chapter, current);
+  }
+  return Array.from(grouped.values()).sort((a, b) => compareChapterNames(a.chapter, b.chapter));
 }
 
 export function getGuestWrongAnswers(): WrongAnswer[] {
@@ -397,6 +437,29 @@ function writeGuestExamAttempts(attempts: ExamAttempt[]) {
   localStorage.setItem(GUEST_EXAM_KEY, JSON.stringify(attempts));
 }
 
+function compareChapterNames(left: string, right: string) {
+  const leftRank = chapterRank(left);
+  const rightRank = chapterRank(right);
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  return left.localeCompare(right, "zh-CN", { numeric: true });
+}
+
+function chapterRank(chapter: string) {
+  const normalized = chapter.trim();
+  const order: Record<string, number> = {
+    导论: 0,
+    绪论: 0,
+    第一章: 1,
+    第二章: 2,
+    第三章: 3,
+    第四章: 4,
+    第五章: 5,
+    第六章: 6,
+    第七章: 7
+  };
+  return order[normalized] ?? Number.MAX_SAFE_INTEGER;
+}
+
 function grade(question: Question, answer: string) {
   if (question.type === "essay") return true;
   return normalize(answer, question) === normalize(question.correctAnswer ?? "", question);
@@ -430,6 +493,22 @@ function takeByType(type: Question["type"], limit: number) {
   return shuffle(questionList.filter((question) => question.type === type))
     .slice(0, limit)
     .map((question) => ({ ...question, isMarked: progress[question.id]?.isMarked ?? false }));
+}
+
+function compareQuestionsByChapter(a: Question, b: Question) {
+  const typeCompare = typeRank(a.type) - typeRank(b.type);
+  if (typeCompare !== 0) return typeCompare;
+  const chapterCompare = (a.chapter ?? "未分章").localeCompare(b.chapter ?? "未分章", "zh-CN", { numeric: true });
+  if (chapterCompare !== 0) return chapterCompare;
+  return a.id.localeCompare(b.id, "zh-CN", { numeric: true });
+}
+
+function typeRank(type: Question["type"]) {
+  if (type === "single") return 0;
+  if (type === "judge") return 1;
+  if (type === "multiple") return 2;
+  if (type === "essay") return 3;
+  return 4;
 }
 
 function calculateGuestExamSummary(questions: Question[], answers: ExamAttempt["answers"]): ExamAttempt["summary"] {

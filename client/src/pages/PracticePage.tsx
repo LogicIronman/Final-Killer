@@ -3,10 +3,13 @@ import { CheckCircle2, ChevronLeft, ChevronRight, Flag, XCircle } from "lucide-r
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { AnimatedList } from "../components/AnimatedList";
 import { Badge, Button, Card, EmptyState } from "../components/ui";
+import { isActionKey, labelForKeyCode, shouldIgnoreActionKeyInInput } from "../keyboard";
 import { useLearningSettings } from "../settings";
 import {
   answerGuestQuestion,
+  getGuestChapterStats,
   getGuestExamQuestions,
   getGuestEssayQuestions,
   getGuestQuestions,
@@ -14,6 +17,7 @@ import {
   markGuestQuestion
 } from "../guestProgress";
 import type { PracticeMode, PracticeViewMode, Question } from "../types";
+import type { ChapterProgress } from "../types";
 
 type Result = {
   isCorrect: boolean;
@@ -40,6 +44,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [marked, setMarked] = useState<Record<string, boolean>>({});
+  const [chapters, setChapters] = useState<ChapterProgress[]>([]);
   const submittingRef = useRef(false);
 
   const current = questions[index];
@@ -61,16 +66,38 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
           : isEssayDrill
             ? getGuestEssayQuestions(10)
           : isReview
-            ? getGuestReviewQuestions(10)
-            : getGuestQuestions(10);
+            ? getGuestReviewQuestions(
+                10,
+                settings.includeEssay,
+                settings.practiceOrderMode,
+                settings.practiceOrderMode === "chapter" ? settings.selectedChapter : null
+              )
+            : getGuestQuestions(
+                10,
+                settings.includeEssay,
+                settings.practiceOrderMode,
+                settings.practiceOrderMode === "chapter" ? settings.selectedChapter : null
+              );
       } else {
         const response = isExam
           ? await api.examQuestions(settings.selectedQuizBankId ?? undefined, settings.includeEssay)
           : isEssayDrill
             ? await api.essayQuestions(10, settings.selectedQuizBankId ?? undefined)
           : isReview
-            ? await api.reviewQuestions(10, settings.selectedQuizBankId ?? undefined, settings.includeEssay)
-            : await api.newQuestions(10, settings.selectedQuizBankId ?? undefined, settings.includeEssay);
+            ? await api.reviewQuestions(
+                10,
+                settings.selectedQuizBankId ?? undefined,
+                settings.includeEssay,
+                settings.practiceOrderMode,
+                settings.practiceOrderMode === "chapter" ? settings.selectedChapter : null
+              )
+            : await api.newQuestions(
+                10,
+                settings.selectedQuizBankId ?? undefined,
+                settings.includeEssay,
+                settings.practiceOrderMode,
+                settings.practiceOrderMode === "chapter" ? settings.selectedChapter : null
+              );
         nextQuestions = response.questions;
       }
       setQuestions(nextQuestions);
@@ -82,11 +109,38 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
     } finally {
       setLoading(false);
     }
-  }, [auth.isGuest, isEssayDrill, isExam, isReview, settings.includeEssay, settings.selectedQuizBankId]);
+  }, [
+    auth.isGuest,
+    isEssayDrill,
+    isExam,
+    isReview,
+    settings.includeEssay,
+    settings.practiceOrderMode,
+    settings.selectedChapter,
+    settings.selectedQuizBankId
+  ]);
+
+  const loadChapters = useCallback(async () => {
+    if (isExam || isEssayDrill) return;
+    if (auth.isGuest) {
+      setChapters(getGuestChapterStats());
+      return;
+    }
+    try {
+      const response = await api.chapterStats(settings.selectedQuizBankId ?? undefined);
+      setChapters(response.chapters);
+    } catch {
+      setChapters([]);
+    }
+  }, [auth.isGuest, isEssayDrill, isExam, isReview, settings.selectedQuizBankId]);
 
   useEffect(() => {
     void loadQuestions();
   }, [loadQuestions]);
+
+  useEffect(() => {
+    void loadChapters();
+  }, [loadChapters, questions]);
 
   const toggleChoice = useCallback(
     (key: string) => {
@@ -125,13 +179,14 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
           result: response
         }
       }));
+      void loadChapters();
     } catch (err) {
       setError(err instanceof Error ? err.message : "提交失败");
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
     }
-  }, [answerText, auth.isGuest, current, mode, result, selected]);
+  }, [answerText, auth.isGuest, current, loadChapters, mode, result, selected]);
 
   const next = useCallback(() => {
     if (index < questions.length - 1) {
@@ -159,6 +214,18 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!current || event.repeat) return;
+      const actionKeyPressed = isActionKey(event, settings.nextQuestionKey);
+      const targetIsEssayInput = current.type === "essay" && event.target instanceof HTMLTextAreaElement;
+      const shouldHandleEssayInputAction = targetIsEssayInput && actionKeyPressed && event.code !== "Space";
+      if (actionKeyPressed && (shouldHandleEssayInputAction || !shouldIgnoreActionKeyInInput(event))) {
+        event.preventDefault();
+        if (result) {
+          next();
+        } else {
+          void submit();
+        }
+        return;
+      }
       const key = event.key.toUpperCase();
       if (current.type !== "essay" && key.length === 1 && key >= "A" && key <= "E" && current.options[key]) {
         toggleChoice(key);
@@ -167,20 +234,6 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
         const optionKey = Object.keys(current.options)[Number(event.key) - 1];
         if (optionKey) toggleChoice(optionKey);
       }
-      if (event.key === "Enter") {
-        if (current.type === "essay" && event.target instanceof HTMLTextAreaElement && !event.ctrlKey && !event.metaKey) {
-          return;
-        }
-        event.preventDefault();
-        if (result) {
-          next();
-        } else {
-          void submit();
-        }
-      }
-      if (event.key === "ArrowRight" && result) {
-        next();
-      }
       if (event.key === "ArrowLeft" && index > 0) {
         previous();
       }
@@ -188,11 +241,17 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [current, index, next, previous, result, submit, toggleChoice]);
+  }, [current, index, next, previous, result, settings.nextQuestionKey, submit, toggleChoice]);
 
   const optionEntries = useMemo(() => (current ? Object.entries(current.options) : []), [current]);
   const isEssay = current?.type === "essay";
   const reviewStreak = result?.progress.consecutiveCorrect ?? current?.reviewProgress?.consecutiveCorrect ?? 0;
+  const nextKeyLabel = labelForKeyCode(settings.nextQuestionKey);
+  const nextChapter = nextAvailableChapter(chapters, settings.selectedChapter, isReview);
+  const activeChapterIndex =
+    settings.practiceOrderMode === "chapter" && settings.selectedChapter
+      ? Math.max(chapters.findIndex((chapter) => chapter.chapter === settings.selectedChapter) + 1, 0)
+      : 0;
 
   if (loading) {
     return (
@@ -215,19 +274,38 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
   if (!current) {
     return (
       <EmptyState
-        title={isEssayDrill ? "当前题库没有简答题" : isReview ? "复习队列已经清空" : "当前没有可抽取的新题"}
+        title={emptyStateTitle({
+          isEssayDrill,
+          isReview,
+          orderMode: settings.practiceOrderMode,
+          selectedChapter: settings.selectedChapter
+        })}
         body={
           isEssayDrill
             ? "抽背模式只使用简答题。请确认当前题库已经导入 type 为 essay 的题目。"
             : isReview
-            ? "当前没有复习中的题目。新题答错后会自动进入这里，连续答对 3 次后离开复习队列。"
-            : "你已经完成了所有未做题，或者当前题库尚未初始化。"
+            ? "当前没有复习中的题目。新题答错后会自动进入这里，连续答对 2 次后离开复习队列。"
+            : "当前新题已刷完，请前往复习模式处理仍需巩固的题目。"
         }
         action={
-          isReview ? (
-            <Link to="/practice/new">
-              <Button>继续做新题</Button>
-            </Link>
+          !isEssayDrill ? (
+            <div className="flex flex-wrap justify-center gap-3">
+              <Link to={isReview ? "/practice/new" : "/practice/review"}>
+                <Button variant={isReview ? "outline" : "ink"}>
+                  {isReview ? "继续做新题" : "前往复习模式"}
+                </Button>
+              </Link>
+              {settings.practiceOrderMode === "chapter" && nextChapter ? (
+                <Button
+                  type="button"
+                  onClick={() => {
+                    settings.setSelectedChapter(nextChapter.chapter);
+                  }}
+                >
+                  下一章
+                </Button>
+              ) : null}
+            </div>
           ) : (
             <Button onClick={loadQuestions}>再试一次</Button>
           )
@@ -314,7 +392,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
                 ? "参考答案"
                 : result.isCorrect
                 ? isReview && result.progress.status === "done"
-                  ? "连续答对 3 次，已完成"
+                  ? "连续答对 2 次，已完成"
                   : "回答正确"
                 : `回答错误，正确答案：${result.correctAnswer}`}
             </div>
@@ -354,10 +432,10 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
             <div className="mt-5">
               <div className="flex items-center justify-between text-sm text-charcoal">
                 <span>当前连续答对</span>
-                <span className="font-medium text-ink">{Math.min(reviewStreak, 3)} / 3</span>
+                <span className="font-medium text-ink">{Math.min(reviewStreak, 2)} / 2</span>
               </div>
-              <div className="mt-3 grid grid-cols-3 gap-2" aria-label={`连续答对 ${Math.min(reviewStreak, 3)} 次`}>
-                {[1, 2, 3].map((step) => (
+              <div className="mt-3 grid grid-cols-2 gap-2" aria-label={`连续答对 ${Math.min(reviewStreak, 2)} 次`}>
+                {[1, 2].map((step) => (
                   <span
                     key={step}
                     className={[
@@ -376,9 +454,55 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
             />
           </div>
           <p className="mt-4 text-sm leading-6 text-charcoal">
-            {isEssayDrill ? "抽背模式只出现简答题，提交后直接查看参考答案。" : isExam ? "考试模式按单选、判断、多选、简答分段组卷。" : "A-E 或 1-5 选择，Enter 提交；答题后再按 Enter 进入下一题。左右箭头可回看或前进。"}
+            {isEssayDrill ? "抽背模式只出现简答题，提交后直接查看参考答案。" : isExam ? "考试模式按单选、判断、多选、简答分段组卷。" : `A-E 或 1-5 选择，按 ${nextKeyLabel} 提交；答题后再按 ${nextKeyLabel} 进入下一题。左箭头可回看。`}
           </p>
         </Card>
+        {!isExam && !isEssayDrill ? (
+          <Card>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-xl font-medium">{isReview ? "章节复习" : "章节刷题"}</h2>
+              <Badge>{settings.practiceOrderMode === "chapter" ? "章节顺序" : "随机"}</Badge>
+            </div>
+            <AnimatedList
+              className="mt-4"
+              viewportClassName="max-h-80"
+              items={[null, ...chapters]}
+              keyForItem={(chapter) => chapter?.chapter ?? "all"}
+              activeIndex={activeChapterIndex}
+              onItemSelect={(chapter) => {
+                if (chapter) {
+                  settings.setPracticeOrderMode("chapter");
+                  settings.setSelectedChapter(chapter.chapter);
+                } else {
+                  settings.setPracticeOrderMode("random");
+                  settings.setSelectedChapter(null);
+                }
+              }}
+              renderItem={(chapter) =>
+                chapter ? (
+                  <ChapterButton
+                    chapter={chapter}
+                    selected={settings.practiceOrderMode === "chapter" && settings.selectedChapter === chapter.chapter}
+                    isReview={isReview}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className={[
+                      "w-full rounded-lg border px-3 py-2 text-left text-sm transition",
+                      settings.practiceOrderMode === "random" ? "border-hp-blue bg-hp-soft" : "border-fog hover:bg-cloud"
+                    ].join(" ")}
+                  >
+                    全部章节
+                  </button>
+                )
+              }
+            />
+            <p className="mt-4 text-sm leading-6 text-charcoal">
+              点击全部章节会进入随机模式；点击单个章节会按该章节顺序抽取{isReview ? "复习题" : "未做题"}。
+            </p>
+          </Card>
+        ) : null}
         <Card>
           <h2 className="text-xl font-medium">状态规则</h2>
           <ul className="mt-4 space-y-3 text-sm leading-6 text-charcoal">
@@ -398,7 +522,7 @@ export function PracticePage({ mode = "new" }: { mode?: PracticeViewMode }) {
               <>
                 <li>答对：连续次数加 1。</li>
                 <li>答错：连续次数归零。</li>
-                <li>连续答对 3 次：进入已完成。</li>
+                <li>连续答对 2 次：进入已完成。</li>
               </>
             ) : (
               <>
@@ -429,4 +553,59 @@ function labelForType(type: Question["type"]) {
   if (type === "multiple") return "多选题";
   if (type === "judge") return "判断题";
   return "单选题";
+}
+
+function emptyStateTitle({
+  isEssayDrill,
+  isReview,
+  orderMode,
+  selectedChapter
+}: {
+  isEssayDrill: boolean;
+  isReview: boolean;
+  orderMode: "random" | "chapter";
+  selectedChapter: string | null;
+}) {
+  if (isEssayDrill) return "当前题库没有简答题";
+  if (isReview) return "复习队列已经清空";
+  if (orderMode === "chapter" && selectedChapter) return "当前章节新题已刷完";
+  return "目前新题已刷完";
+}
+
+function nextAvailableChapter(chapters: ChapterProgress[], selectedChapter: string | null, isReview: boolean) {
+  if (!selectedChapter) return null;
+  const selectedIndex = chapters.findIndex((chapter) => chapter.chapter === selectedChapter);
+  if (selectedIndex === -1) return null;
+  return chapters.slice(selectedIndex + 1).find((chapter) => {
+    if (isReview) return chapter.reviewing > 0;
+    return Math.max(chapter.total - chapter.done - chapter.reviewing, 0) > 0;
+  }) ?? null;
+}
+
+function ChapterButton({ chapter, selected, isReview }: { chapter: ChapterProgress; selected: boolean; isReview: boolean }) {
+  const unavailableCount = isReview ? chapter.reviewing : Math.max(chapter.total - chapter.done - chapter.reviewing, 0);
+  const isUnavailable = unavailableCount <= 0;
+  return (
+    <button
+      type="button"
+      className={[
+        "w-full rounded-lg border px-3 py-3 text-left transition",
+        selected ? "border-hp-blue bg-hp-soft" : "border-fog hover:bg-cloud"
+      ].join(" ")}
+    >
+      <span className="flex items-center justify-between gap-3 text-sm">
+        <span className="font-medium">{chapter.chapter}</span>
+        <span className="text-charcoal">{chapter.done}/{chapter.total}</span>
+      </span>
+      <span className="mt-2 block h-2 rounded-full bg-fog">
+        <span
+          className={[
+            "block h-full rounded-full transition-all",
+            isUnavailable ? "bg-steel" : "bg-hp-blue"
+          ].join(" ")}
+          style={{ width: `${chapter.total ? Math.round((chapter.done / chapter.total) * 100) : 0}%` }}
+        />
+      </span>
+    </button>
+  );
 }

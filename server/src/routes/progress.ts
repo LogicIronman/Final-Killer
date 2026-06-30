@@ -5,6 +5,7 @@ import { sendError, sendOk } from "../lib/api.js";
 import { requireAuth } from "../middleware/auth.js";
 import {
   answerQuestion,
+  getChapterStats,
   getCompletedQuestions,
   getMarkedQuestions,
   getStats,
@@ -36,6 +37,11 @@ const resetSchema = z.object({
 router.get("/stats", requireAuth, async (req, res) => {
   const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
   return sendOk(res, await getStats(await getDb(), req.user!.id, quizBankId));
+});
+
+router.get("/chapter-stats", requireAuth, async (req, res) => {
+  const quizBankId = req.query.quizBankId ? Number(req.query.quizBankId) : undefined;
+  return sendOk(res, { chapters: await getChapterStats(await getDb(), req.user!.id, quizBankId) });
 });
 
 router.get("/wrong-answers", requireAuth, async (req, res) => {

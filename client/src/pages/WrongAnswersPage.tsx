@@ -56,7 +56,7 @@ export function WrongAnswersPage() {
       <div>
         <h1 className="text-4xl font-medium leading-none">错题本</h1>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-charcoal">
-          这里收集所有曾经答错过的题。进入复习模式连续答对 3 次，可以将题目重新标记为已完成。
+          这里收集所有曾经答错过的题。进入复习模式连续答对 2 次，可以将题目重新标记为已完成。
         </p>
         <div className="mt-4">
           <Link to="/practice/review">

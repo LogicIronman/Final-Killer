@@ -1,9 +1,11 @@
 import { Check, GripVertical, RotateCcw, Settings2, Trash2 } from "lucide-react";
-import { Reorder, useDragControls } from "motion/react";
-import { useEffect, useState } from "react";
+import { Reorder, useDragControls, useInView } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { ScrollListFrame } from "../components/AnimatedList";
+import { keyboardEventCode, labelForKeyCode } from "../keyboard";
 import { useLearningSettings } from "../settings";
-import type { ExamSchedule, QuizBank } from "../types";
+import type { ExamSchedule, PracticeOrderMode, QuizBank } from "../types";
 import { Badge, Button, Card } from "../components/ui";
 
 export function SettingsPage() {
@@ -72,6 +74,29 @@ export function SettingsPage() {
               </span>
             </span>
           </label>
+
+          <label className="mt-6 block space-y-2">
+            <span className="text-sm font-medium">新题模式抽题方式</span>
+            <select
+              className="h-11 w-full rounded border border-steel bg-white px-4 text-base text-ink outline-none focus:border-ink"
+              value={settings.practiceOrderMode}
+              onChange={(event) => settings.setPracticeOrderMode(event.target.value as PracticeOrderMode)}
+            >
+              <option value="random">随机刷题</option>
+              <option value="chapter">按章节顺序</option>
+            </select>
+          </label>
+
+          <div className="mt-6 space-y-2">
+            <span className="text-sm font-medium">提交 / 下一题快捷键</span>
+            <KeyCaptureButton
+              value={settings.nextQuestionKey}
+              onChange={settings.setNextQuestionKey}
+            />
+            <p className="text-sm leading-6 text-charcoal">
+              点击按钮后，按下任意键即可绑定；未提交时用于提交答案，出结果后用于进入下一题。
+            </p>
+          </div>
         </Card>
 
         <Card>
@@ -101,26 +126,28 @@ export function SettingsPage() {
                 恢复默认
               </Button>
             </div>
-            <Reorder.Group
-              axis="y"
-              values={visibleCountdownExams.map((exam) => exam.id)}
-              onReorder={settings.setCountdownOrder}
-              className="mt-3 space-y-3"
-            >
-              {visibleCountdownExams.map((exam) => (
-                <CountdownRow
-                  key={exam.id}
-                  exam={exam}
-                  isPrimary={settings.countdownExamId === exam.id}
-                  countdownEnabled={settings.countdownEnabled}
-                  onPrimary={() => settings.setCountdownExamId(exam.id)}
-                  onDelete={() => settings.hideCountdownExam(exam.id)}
-                />
-              ))}
-              {visibleCountdownExams.length === 0 ? (
-                <p className="rounded-lg bg-cloud p-5 text-sm text-charcoal">当前没有可显示的倒计时。点击恢复默认可重新显示全部日程。</p>
-              ) : null}
-            </Reorder.Group>
+            <ScrollListFrame className="mt-3 animated-countdown-list" viewportClassName="max-h-[400px]">
+              <Reorder.Group
+                axis="y"
+                values={visibleCountdownExams.map((exam) => exam.id)}
+                onReorder={settings.setCountdownOrder}
+                className="space-y-4"
+              >
+                {visibleCountdownExams.map((exam) => (
+                  <CountdownRow
+                    key={exam.id}
+                    exam={exam}
+                    isPrimary={settings.countdownExamId === exam.id}
+                    countdownEnabled={settings.countdownEnabled}
+                    onPrimary={() => settings.setCountdownExamId(exam.id)}
+                    onDelete={() => settings.hideCountdownExam(exam.id)}
+                  />
+                ))}
+                {visibleCountdownExams.length === 0 ? (
+                  <p className="rounded-lg bg-cloud p-5 text-sm text-charcoal">当前没有可显示的倒计时。点击恢复默认可重新显示全部日程。</p>
+                ) : null}
+              </Reorder.Group>
+            </ScrollListFrame>
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
@@ -142,6 +169,32 @@ export function SettingsPage() {
   );
 }
 
+function KeyCaptureButton({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [capturing, setCapturing] = useState(false);
+
+  return (
+    <button
+      type="button"
+      className={[
+        "flex h-11 w-full items-center justify-between rounded border px-4 text-left text-base transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-hp-blue",
+        capturing ? "border-hp-blue bg-hp-soft text-ink" : "border-steel bg-white hover:bg-cloud"
+      ].join(" ")}
+      onClick={() => setCapturing(true)}
+      onKeyDown={(event) => {
+        if (!capturing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onChange(keyboardEventCode(event));
+        setCapturing(false);
+      }}
+      onBlur={() => setCapturing(false)}
+    >
+      <span>{capturing ? "按下要绑定的键..." : labelForKeyCode(value)}</span>
+      <Badge>{capturing ? "监听中" : "点击更改"}</Badge>
+    </button>
+  );
+}
+
 function CountdownRow({
   exam,
   isPrimary,
@@ -156,15 +209,21 @@ function CountdownRow({
   onDelete: () => void;
 }) {
   const controls = useDragControls();
+  const rowRef = useRef<HTMLLIElement | null>(null);
+  const inView = useInView(rowRef, { amount: 0.5, once: false });
 
   return (
     <Reorder.Item
+      ref={rowRef}
       value={exam.id}
       dragListener={false}
       dragControls={controls}
-      whileDrag={{ scale: 1.015, boxShadow: "0 8px 18px rgba(26, 26, 26, 0.12)" }}
-      transition={{ type: "spring", stiffness: 420, damping: 34 }}
-      className="flex items-center justify-between gap-4 rounded-lg border border-fog bg-white px-4 py-3 transition hover:border-steel hover:bg-cloud"
+      layout
+      initial={{ scale: 0.7, opacity: 0 }}
+      animate={inView ? { scale: 1, opacity: 1 } : { scale: 0.7, opacity: 0 }}
+      whileDrag={{ scale: 1.02, boxShadow: "0 14px 26px rgba(26, 26, 26, 0.16)" }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className="flex cursor-default items-center justify-between gap-4 rounded-lg border border-fog bg-white px-4 py-3 transition-colors hover:border-steel hover:bg-cloud"
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">

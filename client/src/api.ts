@@ -1,9 +1,11 @@
 import type {
   ApiEnvelope,
+  ChapterProgress,
   ExamAttempt,
   ExamAttemptRecord,
   ExamSchedule,
   LeaderboardEntry,
+  PracticeOrderMode,
   PracticeMode,
   Question,
   QuestionBankAdminState,
@@ -72,14 +74,34 @@ export const api = {
   async bankStats(quizBankId: number) {
     return request<Stats>(`/api/progress/stats?quizBankId=${quizBankId}`);
   },
-  async newQuestions(limit = 10, quizBankId?: number, includeEssay = false) {
+  async chapterStats(quizBankId?: number) {
+    const query = quizBankId ? `?quizBankId=${quizBankId}` : "";
+    return request<{ chapters: ChapterProgress[] }>(`/api/progress/chapter-stats${query}`);
+  },
+  async newQuestions(
+    limit = 10,
+    quizBankId?: number,
+    includeEssay = false,
+    orderMode: PracticeOrderMode = "random",
+    chapter?: string | null
+  ) {
     const params = new URLSearchParams({ limit: String(limit), includeEssay: String(includeEssay) });
     if (quizBankId) params.set("quizBankId", String(quizBankId));
+    params.set("orderMode", orderMode);
+    if (chapter) params.set("chapter", chapter);
     return request<{ questions: Question[] }>(`/api/questions/new?${params.toString()}`);
   },
-  async reviewQuestions(limit = 10, quizBankId?: number, includeEssay = false) {
+  async reviewQuestions(
+    limit = 10,
+    quizBankId?: number,
+    includeEssay = false,
+    orderMode: PracticeOrderMode = "random",
+    chapter?: string | null
+  ) {
     const params = new URLSearchParams({ limit: String(limit), includeEssay: String(includeEssay) });
     if (quizBankId) params.set("quizBankId", String(quizBankId));
+    params.set("orderMode", orderMode);
+    if (chapter) params.set("chapter", chapter);
     return request<{ questions: Question[] }>(`/api/questions/review?${params.toString()}`);
   },
   async examQuestions(quizBankId?: number, includeEssay = false) {
@@ -209,5 +231,14 @@ export const api = {
       questionCount: number;
       bankName: string;
     }>(`/api/admin/question-bank/versions/${versionId}/rollback`, { method: "POST" });
+  },
+  async publicAppSettings() {
+    return request<{ topGameLink: string }>("/api/app-settings/public");
+  },
+  async updateTopGameLink(topGameLink: string) {
+    return request<{ topGameLink: string }>("/api/app-settings/top-game-link", {
+      method: "PUT",
+      body: JSON.stringify({ topGameLink })
+    });
   }
 };

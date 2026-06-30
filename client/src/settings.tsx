@@ -1,11 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import type { NextQuestionKey, PracticeOrderMode } from "./types";
 
 const STORAGE_KEY = "final-killer-learning-settings";
 
 type LearningSettings = {
   selectedQuizBankId: number | null;
   includeEssay: boolean;
+  practiceOrderMode: PracticeOrderMode;
+  selectedChapter: string | null;
+  nextQuestionKey: NextQuestionKey;
   countdownEnabled: boolean;
   countdownExamId: number | null;
   countdownHiddenExamIds: number[];
@@ -15,6 +19,9 @@ type LearningSettings = {
 type LearningSettingsContextValue = LearningSettings & {
   setSelectedQuizBankId: (id: number | null) => void;
   setIncludeEssay: (enabled: boolean) => void;
+  setPracticeOrderMode: (mode: PracticeOrderMode) => void;
+  setSelectedChapter: (chapter: string | null) => void;
+  setNextQuestionKey: (key: NextQuestionKey) => void;
   setCountdownEnabled: (enabled: boolean) => void;
   setCountdownExamId: (id: number | null) => void;
   hideCountdownExam: (id: number) => void;
@@ -26,6 +33,9 @@ type LearningSettingsContextValue = LearningSettings & {
 const defaultSettings: LearningSettings = {
   selectedQuizBankId: null,
   includeEssay: true,
+  practiceOrderMode: "random",
+  selectedChapter: null,
+  nextQuestionKey: "Space",
   countdownEnabled: true,
   countdownExamId: null,
   countdownHiddenExamIds: [],
@@ -52,6 +62,9 @@ export function LearningSettingsProvider({ children }: { children: ReactNode }) 
       ...settings,
       setSelectedQuizBankId: (id) => setSettings((current) => ({ ...current, selectedQuizBankId: id })),
       setIncludeEssay: (enabled) => setSettings((current) => ({ ...current, includeEssay: enabled })),
+      setPracticeOrderMode: (mode) => setSettings((current) => ({ ...current, practiceOrderMode: mode })),
+      setSelectedChapter: (chapter) => setSettings((current) => ({ ...current, selectedChapter: chapter })),
+      setNextQuestionKey: (key) => setSettings((current) => ({ ...current, nextQuestionKey: key })),
       setCountdownEnabled: (enabled) => setSettings((current) => ({ ...current, countdownEnabled: enabled })),
       setCountdownExamId: (id) => setSettings((current) => ({ ...current, countdownExamId: id })),
       hideCountdownExam: (id) =>

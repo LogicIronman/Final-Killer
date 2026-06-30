@@ -5,6 +5,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { ExamSummaryTable } from "../components/ExamSummaryTable";
 import { Badge, Button, Card, EmptyState } from "../components/ui";
+import { isActionKey, shouldIgnoreActionKeyInInput } from "../keyboard";
 import {
   answerGuestExamAttemptQuestion,
   getGuestCurrentExamAttempt,
@@ -135,18 +136,10 @@ export function ExamPracticePage() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!attempt || attempt.status !== "active" || !current || event.repeat) return;
-      const key = event.key.toUpperCase();
-      if (!currentResult?.gradedAt && current.type !== "essay" && key.length === 1 && key >= "A" && key <= "E" && current.options[key]) {
-        selectAnswer(current, nextChoiceValue(current, currentAnswer, key));
-      }
-      if (!currentResult?.gradedAt && current.type !== "essay" && /^[1-5]$/.test(event.key)) {
-        const optionKey = Object.keys(current.options)[Number(event.key) - 1];
-        if (optionKey) selectAnswer(current, nextChoiceValue(current, currentAnswer, optionKey));
-      }
-      if (event.key === "Enter") {
-        if (current.type === "essay" && event.target instanceof HTMLTextAreaElement && !event.ctrlKey && !event.metaKey) {
-          return;
-        }
+      const actionKeyPressed = isActionKey(event, settings.nextQuestionKey);
+      const targetIsEssayInput = current.type === "essay" && event.target instanceof HTMLTextAreaElement;
+      const shouldHandleEssayInputAction = targetIsEssayInput && actionKeyPressed && event.code !== "Space";
+      if (actionKeyPressed && (shouldHandleEssayInputAction || !shouldIgnoreActionKeyInInput(event))) {
         event.preventDefault();
         if (currentResult?.gradedAt) {
           if (!isLastQuestion) nextQuestion();
@@ -155,9 +148,15 @@ export function ExamPracticePage() {
         if (current.type === "essay" || currentAnswer) {
           void submitAnswer(current.id, currentAnswer);
         }
+        return;
       }
-      if (event.key === "ArrowRight" && currentResult?.gradedAt && !isLastQuestion) {
-        nextQuestion();
+      const key = event.key.toUpperCase();
+      if (!currentResult?.gradedAt && current.type !== "essay" && key.length === 1 && key >= "A" && key <= "E" && current.options[key]) {
+        selectAnswer(current, nextChoiceValue(current, currentAnswer, key));
+      }
+      if (!currentResult?.gradedAt && current.type !== "essay" && /^[1-5]$/.test(event.key)) {
+        const optionKey = Object.keys(current.options)[Number(event.key) - 1];
+        if (optionKey) selectAnswer(current, nextChoiceValue(current, currentAnswer, optionKey));
       }
       if (event.key === "ArrowLeft" && index > 0) {
         previousQuestion();
@@ -176,6 +175,7 @@ export function ExamPracticePage() {
     nextQuestion,
     previousQuestion,
     selectAnswer,
+    settings.nextQuestionKey,
     submitAnswer
   ]);
 

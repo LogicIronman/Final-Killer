@@ -3,11 +3,48 @@ import { gradeAnswer } from "../lib/grading.js";
 import type { PracticeMode, ProgressStatus, QuestionRow } from "../types.js";
 import { getDefaultQuizBank, toPublicQuestion } from "./questionBank.js";
 
+export type QuestionOrderMode = "random" | "chapter";
 type BankScope = { quizBankId?: number; includeEssay?: boolean };
+type NewQuestionScope = BankScope & { orderMode?: QuestionOrderMode; chapter?: string };
+type ReviewQuestionScope = BankScope & { orderMode?: QuestionOrderMode; chapter?: string };
 type ExamScope = BankScope;
 
-export async function getNewQuestions(db: AppDb, userId: number, limit: number, scope: BankScope = {}) {
+const CHAPTER_ALIASES = new Map<string, number>([
+  ["导论", 0],
+  ["绪论", 0],
+  ["第一章", 1],
+  ["第二章", 2],
+  ["第三章", 3],
+  ["第四章", 4],
+  ["第五章", 5],
+  ["第六章", 6],
+  ["第七章", 7]
+]);
+
+export async function getNewQuestions(db: AppDb, userId: number, limit: number, scope: NewQuestionScope = {}) {
   const bankId = await resolveQuizBankId(db, scope.quizBankId);
+  const chapter = scope.chapter?.trim();
+  const orderMode = scope.orderMode ?? "random";
+  const orderClause =
+    orderMode === "chapter"
+      ? `CASE q.type
+           WHEN 'single' THEN 0
+           WHEN 'judge' THEN 1
+           WHEN 'multiple' THEN 2
+           WHEN 'essay' THEN 3
+           ELSE 4
+         END,
+         COALESCE(q.chapter, '未分章') ASC,
+         CAST(q.id AS INTEGER) ASC,
+         q.id ASC`
+      : `CASE q.type
+           WHEN 'single' THEN 0
+           WHEN 'judge' THEN 1
+           WHEN 'multiple' THEN 2
+           WHEN 'essay' THEN 3
+           ELSE 4
+         END,
+         RANDOM()`;
   const rows = await db.all<QuestionRow[]>(
     `SELECT q.*, COALESCE(p.is_marked, 0) AS is_marked
      FROM questions q
@@ -17,20 +54,15 @@ export async function getNewQuestions(db: AppDb, userId: number, limit: number, 
       AND p.quiz_bank_id = q.quiz_bank_id
      WHERE q.quiz_bank_id = ?
        AND (? = 1 OR q.type <> 'essay')
+       AND (? IS NULL OR COALESCE(q.chapter, '未分章') = ?)
        AND (p.id IS NULL OR p.status = 'unseen')
-     ORDER BY
-       CASE q.type
-         WHEN 'single' THEN 0
-         WHEN 'judge' THEN 1
-         WHEN 'multiple' THEN 2
-         WHEN 'essay' THEN 3
-         ELSE 4
-       END,
-       RANDOM()
+     ORDER BY ${orderClause}
      LIMIT ?`,
     userId,
     bankId,
     scope.includeEssay ? 1 : 0,
+    chapter || null,
+    chapter || null,
     limit
   );
 
@@ -91,8 +123,23 @@ export async function getEssayQuestions(db: AppDb, userId: number, limit: number
   return rows.map(toPublicQuestion);
 }
 
-export async function getReviewQuestions(db: AppDb, userId: number, limit: number, scope: BankScope = {}) {
+export async function getReviewQuestions(db: AppDb, userId: number, limit: number, scope: ReviewQuestionScope = {}) {
   const bankId = await resolveQuizBankId(db, scope.quizBankId);
+  const chapter = scope.chapter?.trim();
+  const orderMode = scope.orderMode ?? "random";
+  const orderClause =
+    orderMode === "chapter"
+      ? `CASE q.type
+           WHEN 'single' THEN 0
+           WHEN 'judge' THEN 1
+           WHEN 'multiple' THEN 2
+           WHEN 'essay' THEN 3
+           ELSE 4
+         END,
+         COALESCE(q.chapter, '未分章') ASC,
+         CAST(q.id AS INTEGER) ASC,
+         q.id ASC`
+      : "RANDOM()";
   const rows = await db.all<QuestionRow[]>(
     `SELECT q.*, p.is_marked, p.consecutive_correct, p.wrong_count
      FROM user_progress p
@@ -100,15 +147,15 @@ export async function getReviewQuestions(db: AppDb, userId: number, limit: numbe
      WHERE p.user_id = ?
        AND p.quiz_bank_id = ?
        AND (? = 1 OR q.type <> 'essay')
+       AND (? IS NULL OR COALESCE(q.chapter, '未分章') = ?)
        AND p.status = 'reviewing'
-     ORDER BY
-       p.consecutive_correct ASC,
-       COALESCE(p.last_wrong_at, p.first_wrong_at, p.last_answered_at) ASC,
-       RANDOM()
+     ORDER BY ${orderClause}
      LIMIT ?`,
     userId,
     bankId,
     scope.includeEssay ? 1 : 0,
+    chapter || null,
+    chapter || null,
     limit
   );
 
@@ -293,6 +340,62 @@ export async function getStats(db: AppDb, userId: number, quizBankId?: number) {
   };
 }
 
+export async function getChapterStats(db: AppDb, userId: number, quizBankId?: number) {
+  const bankId = await resolveQuizBankId(db, quizBankId);
+  const rows = await db.all<
+    Array<{
+      chapter: string | null;
+      total: number;
+      done: number;
+      reviewing: number;
+      attempts: number;
+      correct: number;
+    }>
+  >(
+    `SELECT
+       COALESCE(q.chapter, '未分章') as chapter,
+       COUNT(q.id) as total,
+       COALESCE(SUM(CASE WHEN p.status = 'done' THEN 1 ELSE 0 END), 0) as done,
+       COALESCE(SUM(CASE WHEN p.status = 'reviewing' THEN 1 ELSE 0 END), 0) as reviewing,
+       COALESCE(SUM(p.total_attempts), 0) as attempts,
+       COALESCE(SUM(p.correct_count), 0) as correct
+     FROM questions q
+     LEFT JOIN user_progress p
+       ON p.question_id = q.id
+      AND p.user_id = ?
+      AND p.quiz_bank_id = q.quiz_bank_id
+     WHERE q.quiz_bank_id = ?
+     GROUP BY COALESCE(q.chapter, '未分章')
+     ORDER BY COALESCE(q.chapter, '未分章') ASC`,
+    userId,
+    bankId
+  );
+
+  return rows
+    .map((row) => ({
+      chapter: row.chapter ?? "未分章",
+      total: Number(row.total),
+      done: Number(row.done),
+      reviewing: Number(row.reviewing),
+      attempts: Number(row.attempts),
+      correct: Number(row.correct),
+      accuracy: Number(row.attempts) > 0 ? Math.round((Number(row.correct) / Number(row.attempts)) * 1000) / 10 : 0
+    }))
+    .sort((a, b) => compareChapterNames(a.chapter, b.chapter));
+}
+
+function compareChapterNames(left: string, right: string) {
+  const leftRank = chapterRank(left);
+  const rightRank = chapterRank(right);
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  return left.localeCompare(right, "zh-CN", { numeric: true });
+}
+
+function chapterRank(chapter: string) {
+  const normalized = chapter.trim();
+  return CHAPTER_ALIASES.get(normalized) ?? Number.MAX_SAFE_INTEGER;
+}
+
 export async function getWrongAnswers(db: AppDb, userId: number, quizBankId?: number) {
   const bankId = await resolveQuizBankId(db, quizBankId);
   const rows = await db.all<
@@ -464,7 +567,7 @@ export async function markQuestion(
 
 function nextStatus(mode: PracticeMode, isCorrect: boolean, consecutiveCorrect: number): ProgressStatus {
   if (mode === "review") {
-    return isCorrect && consecutiveCorrect >= 3 ? "done" : "reviewing";
+    return isCorrect && consecutiveCorrect >= 2 ? "done" : "reviewing";
   }
   return isCorrect ? "done" : "reviewing";
 }

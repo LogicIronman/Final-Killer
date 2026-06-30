@@ -5,6 +5,7 @@ import test from "node:test";
 import { migrate, openDb } from "../db.js";
 import {
   answerQuestion,
+  getChapterStats,
   getCompletedQuestions,
   getEssayQuestions,
   getMarkedQuestions,
@@ -58,6 +59,33 @@ test("new questions can be scoped to a selected quiz bank", async () => {
 
   assert.deepEqual(questions.map((question) => question.id), ["other-q1"]);
   assert.equal(questions[0].quizBankId, 2);
+  await db.close();
+});
+
+test("new questions can follow type groups while ordering by chapter", async () => {
+  const db = await setupDb();
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('10', 1, 'Late?', '{"A":"One","B":"Two"}', 'A', '第二章', 'single', NULL)`
+  );
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('3', 1, 'Early?', '{"A":"One","B":"Two"}', 'A', '第二章', 'single', NULL)`
+  );
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('essay-early', 1, 'Essay?', '{}', '参考答案', '导论', 'essay', NULL)`
+  );
+
+  const ordered = await getNewQuestions(db, 1, 10, { quizBankId: 1, orderMode: "chapter" });
+  assert.deepEqual(ordered.map((question) => question.id), ["q1", "3", "10", "q2"]);
+  assert.equal(ordered.some((question) => question.type === "essay"), false);
+
+  const withEssay = await getNewQuestions(db, 1, 10, { quizBankId: 1, orderMode: "chapter", includeEssay: true });
+  assert.deepEqual(withEssay.map((question) => question.id), ["q1", "3", "10", "q2", "essay-early"]);
+
+  const filtered = await getNewQuestions(db, 1, 10, { quizBankId: 1, orderMode: "chapter", chapter: "第二章" });
+  assert.deepEqual(filtered.map((question) => question.id), ["3", "10"]);
   await db.close();
 });
 
@@ -154,6 +182,35 @@ test("stats counts unseen, reviewing, done, and accuracy", async () => {
   await db.close();
 });
 
+test("chapter stats calculate progress and accuracy per chapter", async () => {
+  const db = await setupDb();
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('q0', 1, 'Intro?', '{"A":"One","B":"Two"}', 'A', '导论', 'single', NULL)`
+  );
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('q3', 1, 'Other?', '{"A":"One","B":"Two"}', 'A', '第二章', 'single', NULL)`
+  );
+  await db.run(
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('q7', 1, 'Last?', '{"A":"One","B":"Two"}', 'A', '第七章', 'single', NULL)`
+  );
+  await db.run("UPDATE quiz_banks SET question_count = 5 WHERE id = 1");
+  await answerQuestion(db, { userId: 1, questionId: "q1", answer: "A", mode: "new" });
+  await answerQuestion(db, { userId: 1, questionId: "q2", answer: "A", mode: "new" });
+
+  const chapters = await getChapterStats(db, 1, 1);
+
+  assert.deepEqual(chapters, [
+    { chapter: "导论", total: 1, done: 0, reviewing: 0, attempts: 0, correct: 0, accuracy: 0 },
+    { chapter: "第一章", total: 2, done: 1, reviewing: 1, attempts: 2, correct: 1, accuracy: 50 },
+    { chapter: "第二章", total: 1, done: 0, reviewing: 0, attempts: 0, correct: 0, accuracy: 0 },
+    { chapter: "第七章", total: 1, done: 0, reviewing: 0, attempts: 0, correct: 0, accuracy: 0 }
+  ]);
+  await db.close();
+});
+
 test("marking an unanswered question keeps it in the new-question pool", async () => {
   const db = await setupDb();
   await markQuestion(db, { userId: 1, questionId: "q1", isMarked: true });
@@ -167,34 +224,35 @@ test("marking an unanswered question keeps it in the new-question pool", async (
   await db.close();
 });
 
-test("review questions prioritize lower streaks and older wrong answers", async () => {
+test("review questions can follow chapter mode and filter a chapter", async () => {
   const db = await setupDb();
   await answerQuestion(db, { userId: 1, questionId: "q1", answer: "B", mode: "new" });
   await answerQuestion(db, { userId: 1, questionId: "q2", answer: "C", mode: "new" });
   await db.run(
-    "UPDATE user_progress SET consecutive_correct = 1 WHERE question_id = 'q1'"
+    `INSERT INTO questions (id, quiz_bank_id, question, options_json, correct_answer, chapter, type, explanation)
+     VALUES ('q3', 1, 'Other?', '{"A":"One","B":"Two"}', 'A', '第二章', 'single', NULL)`
   );
+  await answerQuestion(db, { userId: 1, questionId: "q3", answer: "B", mode: "new" });
 
-  const questions = await getReviewQuestions(db, 1, 10);
+  const questions = await getReviewQuestions(db, 1, 10, { orderMode: "chapter" });
+  assert.deepEqual(questions.map((question) => question.id), ["q1", "q3", "q2"]);
 
-  assert.deepEqual(questions.map((question) => question.id), ["q2", "q1"]);
-  assert.equal(questions[0].reviewProgress?.consecutiveCorrect, 0);
+  const filtered = await getReviewQuestions(db, 1, 10, { orderMode: "chapter", chapter: "第二章" });
+  assert.deepEqual(filtered.map((question) => question.id), ["q3"]);
   await db.close();
 });
 
-test("three consecutive correct review answers mark a question done", async () => {
+test("two consecutive correct review answers mark a question done", async () => {
   const db = await setupDb();
   await answerQuestion(db, { userId: 1, questionId: "q1", answer: "B", mode: "new" });
 
   const first = await answerQuestion(db, { userId: 1, questionId: "q1", answer: "A", mode: "review" });
   const second = await answerQuestion(db, { userId: 1, questionId: "q1", answer: "A", mode: "review" });
-  const third = await answerQuestion(db, { userId: 1, questionId: "q1", answer: "A", mode: "review" });
 
   assert.equal(first.progress.status, "reviewing");
   assert.equal(first.progress.consecutiveCorrect, 1);
+  assert.equal(second.progress.status, "done");
   assert.equal(second.progress.consecutiveCorrect, 2);
-  assert.equal(third.progress.status, "done");
-  assert.equal(third.progress.consecutiveCorrect, 3);
   assert.deepEqual((await getCompletedQuestions(db, 1)).map((question) => question.id), ["q1"]);
   await db.close();
 });

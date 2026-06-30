@@ -4,10 +4,11 @@ import { ArrowRight, BookCheck, BookOpen, ClipboardList, FileQuestion, Flag, His
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { AnimatedList } from "../components/AnimatedList";
 import { Badge, Button, Card, EmptyState } from "../components/ui";
-import { getGuestStats } from "../guestProgress";
+import { getGuestChapterStats, getGuestStats } from "../guestProgress";
 import { useLearningSettings } from "../settings";
-import type { ExamSchedule, QuizBank, Stats } from "../types";
+import type { ChapterProgress, ExamSchedule, QuizBank, Stats } from "../types";
 
 const ExamCountdown = lazy(() =>
   import("../components/ExamCountdown").then((module) => ({ default: module.ExamCountdown }))
@@ -20,12 +21,14 @@ export function DashboardPage() {
   const [error, setError] = useState("");
   const [exams, setExams] = useState<ExamSchedule[]>([]);
   const [banks, setBanks] = useState<QuizBank[]>([]);
+  const [chapters, setChapters] = useState<ChapterProgress[]>([]);
 
   const selectedBankId = settings.selectedQuizBankId ?? banks[0]?.id ?? null;
 
   useEffect(() => {
     if (auth.isGuest) {
       setStats(getGuestStats());
+      setChapters(getGuestChapterStats());
       return;
     }
 
@@ -34,6 +37,10 @@ export function DashboardPage() {
       .bankStats(selectedBankId)
       .then(setStats)
       .catch((err) => setError(err instanceof Error ? err.message : "统计加载失败"));
+    api
+      .chapterStats(selectedBankId)
+      .then((response) => setChapters(response.chapters))
+      .catch(() => setChapters([]));
   }, [auth.isGuest, selectedBankId]);
 
   useEffect(() => {
@@ -117,7 +124,7 @@ export function DashboardPage() {
         <Card>
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-sm text-charcoal">完成进度</p>
+              <p className="text-sm text-charcoal">总进度</p>
               <p className="mt-2 text-5xl font-medium leading-none">{progressPercent}%</p>
             </div>
             <Target className="h-8 w-8 text-hp-blue" aria-hidden />
@@ -128,12 +135,21 @@ export function DashboardPage() {
               style={{ width: `${progressPercent}%` }}
             />
           </div>
-          <div className="mt-8 grid grid-cols-2 gap-4 text-sm">
-            <Metric label="总题数" value={stats.total} />
-            <Metric label="今日刷题" value={stats.today} />
-            <Metric label="正确率" value={`${stats.accuracy}%`} />
-            <Metric label="重点题" value={stats.marked} to="/marked" />
+          <div className="mt-4 rounded-lg bg-cloud p-4 text-sm">
+            <p className="text-charcoal">正确率</p>
+            <p className="mt-1 text-xl font-medium text-ink">{stats.accuracy}%</p>
           </div>
+          {chapters.length ? (
+            <AnimatedList
+              className="mt-6"
+              viewportClassName="max-h-72"
+              items={chapters}
+              keyForItem={(chapter) => chapter.chapter}
+              renderItem={(chapter) => <ChapterProgressRow chapter={chapter} />}
+            />
+          ) : (
+            <p className="mt-6 rounded-lg bg-cloud p-4 text-sm text-charcoal">当前题库暂无章节数据。</p>
+          )}
         </Card>
       </section>
 
@@ -172,14 +188,19 @@ function orderExams(exams: ExamSchedule[], order: number[]) {
   });
 }
 
-function Metric({ label, value, to }: { label: string; value: string | number; to?: string }) {
-  const content = (
-    <div className="h-full rounded-lg bg-cloud p-4 transition hover:bg-fog">
-      <p className="text-charcoal">{label}</p>
-      <p className="mt-1 text-xl font-medium">{value}</p>
+function ChapterProgressRow({ chapter }: { chapter: ChapterProgress }) {
+  const percent = chapter.total > 0 ? Math.round((chapter.done / chapter.total) * 100) : 0;
+  return (
+    <div className="rounded-lg bg-cloud p-3">
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="font-medium">{chapter.chapter}</span>
+        <span className="text-charcoal">{chapter.done}/{chapter.total} · {chapter.accuracy}%</span>
+      </div>
+      <div className="mt-2 h-2 rounded-full bg-fog">
+        <div className="h-full rounded-full bg-hp-blue" style={{ width: `${percent}%` }} />
+      </div>
     </div>
   );
-  return to ? <Link to={to}>{content}</Link> : content;
 }
 
 function StatCard({ icon, label, value, to }: { icon: ReactNode; label: string; value: number; to: string }) {

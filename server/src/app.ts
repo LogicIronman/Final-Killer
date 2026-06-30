@@ -4,6 +4,7 @@ import express from "express";
 import { config } from "./config.js";
 import { migrate, getDb } from "./db.js";
 import { sendError } from "./lib/api.js";
+import appSettingsRouter from "./routes/appSettings.js";
 import authRouter from "./routes/auth.js";
 import examAttemptsRouter from "./routes/examAttempts.js";
 import examsRouter from "./routes/exams.js";
@@ -30,6 +31,7 @@ export async function createApp() {
   });
 
   app.use("/api/auth", authRouter);
+  app.use("/api/app-settings", appSettingsRouter);
   app.use("/api/admin/question-bank", adminQuestionBankRouter);
   app.use("/api/exam-attempts", examAttemptsRouter);
   app.use("/api/exams", examsRouter);

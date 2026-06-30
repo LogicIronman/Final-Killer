@@ -5,6 +5,8 @@ import { useAuth } from "../auth";
 import { Badge, Button, Card, EmptyState, Input } from "../components/ui";
 import type { ExamSchedule } from "../types";
 
+const DEFAULT_TOP_GAME_LINK = "https://generals.io/games/5rsr";
+
 export function AdminExamsPage() {
   const auth = useAuth();
   const [exams, setExams] = useState<ExamSchedule[]>([]);
@@ -14,7 +16,10 @@ export function AdminExamsPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingLink, setSavingLink] = useState(false);
   const [error, setError] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const [topGameLink, setTopGameLink] = useState(DEFAULT_TOP_GAME_LINK);
 
   useEffect(() => {
     if (!auth.isAdmin) {
@@ -22,6 +27,7 @@ export function AdminExamsPage() {
       return;
     }
     void loadExams();
+    api.publicAppSettings().then((response) => setTopGameLink(response.topGameLink)).catch(() => {});
   }, [auth.isAdmin]);
 
   async function loadExams() {
@@ -81,6 +87,20 @@ export function AdminExamsPage() {
     setExamAt("");
   }
 
+  async function saveTopGameLink(event: React.FormEvent) {
+    event.preventDefault();
+    setSavingLink(true);
+    setLinkError("");
+    try {
+      const response = await api.updateTopGameLink(topGameLink);
+      setTopGameLink(response.topGameLink);
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : "链接保存失败");
+    } finally {
+      setSavingLink(false);
+    }
+  }
+
   if (!auth.isAdmin) {
     return <EmptyState title="需要管理员权限" body="当前账号不能修改考试日程。" />;
   }
@@ -100,43 +120,67 @@ export function AdminExamsPage() {
       </div>
 
       <section className="grid gap-8 lg:grid-cols-[360px_1fr]">
-        <Card>
-          <h2 className="text-xl font-medium">{editingId === null ? "添加考试" : "修改考试"}</h2>
-          <form className="mt-5 space-y-4" onSubmit={saveExam}>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">课程名</span>
-              <Input
-                value={courseName}
-                onChange={(event) => setCourseName(event.target.value)}
-                maxLength={80}
-                placeholder="例如：马克思主义基本原理"
-                required
-              />
-            </label>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">考试时间</span>
-              <Input
-                type="datetime-local"
-                value={examAt}
-                onChange={(event) => setExamAt(event.target.value)}
-                required
-              />
-            </label>
-            {error ? <p className="rounded bg-red-50 px-3 py-2 text-sm text-danger" role="alert">{error}</p> : null}
-            <div className="flex flex-wrap gap-3">
-              <Button type="submit" loading={saving}>
-                <CalendarPlus className="h-4 w-4" aria-hidden />
-                {editingId === null ? "添加" : "保存修改"}
-              </Button>
-              {editingId !== null ? (
-                <Button type="button" variant="ghost" disabled={saving} onClick={clearForm}>
-                  <X className="h-4 w-4" aria-hidden />
-                  取消
+        <div className="space-y-6">
+          <Card>
+            <h2 className="text-xl font-medium">{editingId === null ? "添加考试" : "修改考试"}</h2>
+            <form className="mt-5 space-y-4" onSubmit={saveExam}>
+              <label className="block space-y-2">
+                <span className="text-sm font-medium">课程名</span>
+                <Input
+                  value={courseName}
+                  onChange={(event) => setCourseName(event.target.value)}
+                  maxLength={80}
+                  placeholder="例如：马克思主义基本原理"
+                  required
+                />
+              </label>
+              <label className="block space-y-2">
+                <span className="text-sm font-medium">考试时间</span>
+                <Input
+                  type="datetime-local"
+                  value={examAt}
+                  onChange={(event) => setExamAt(event.target.value)}
+                  required
+                />
+              </label>
+              {error ? <p className="rounded bg-red-50 px-3 py-2 text-sm text-danger" role="alert">{error}</p> : null}
+              <div className="flex flex-wrap gap-3">
+                <Button type="submit" loading={saving}>
+                  <CalendarPlus className="h-4 w-4" aria-hidden />
+                  {editingId === null ? "添加" : "保存修改"}
                 </Button>
-              ) : null}
-            </div>
-          </form>
-        </Card>
+                {editingId !== null ? (
+                  <Button type="button" variant="ghost" disabled={saving} onClick={clearForm}>
+                    <X className="h-4 w-4" aria-hidden />
+                    取消
+                  </Button>
+                ) : null}
+              </div>
+            </form>
+          </Card>
+
+          <Card>
+            <h2 className="text-xl font-medium">顶部链接</h2>
+            <p className="mt-2 text-sm leading-6 text-charcoal">右上角“来一把≡ω≡”会打开这里设置的链接。</p>
+            <form className="mt-5 space-y-4" onSubmit={saveTopGameLink}>
+              <label className="block space-y-2">
+                <span className="text-sm font-medium">跳转链接</span>
+                <Input
+                  value={topGameLink}
+                  onChange={(event) => setTopGameLink(event.target.value)}
+                  placeholder={DEFAULT_TOP_GAME_LINK}
+                />
+              </label>
+              {linkError ? <p className="rounded bg-red-50 px-3 py-2 text-sm text-danger" role="alert">{linkError}</p> : null}
+              <div className="flex flex-wrap gap-3">
+                <Button type="submit" loading={savingLink}>保存链接</Button>
+                <Button type="button" variant="ghost" disabled={savingLink} onClick={() => setTopGameLink(DEFAULT_TOP_GAME_LINK)}>
+                  恢复默认
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
 
         <div>
           <h2 className="text-xl font-medium">全部日程</h2>
@@ -197,4 +241,3 @@ function formatDate(value: string) {
     hour12: false
   }).format(new Date(value));
 }
-
